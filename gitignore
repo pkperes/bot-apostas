@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+historico_acertos.json
+bot_config.json
