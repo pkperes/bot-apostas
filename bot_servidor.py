@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Bot Apostas Futebol - VERSAO SERVIDOR
-Roda 24/7 na nuvem e envia apostas no Telegram todo dia as 14:30
-As chaves sao lidas das variaveis de ambiente do Railway (nunca no codigo)
-"""
 import os, sys, json, asyncio, logging
 from datetime import datetime, timezone, time as dtime
 import xml.etree.ElementTree as ET
@@ -19,12 +14,23 @@ except ImportError:
     import httpx
     from openai import OpenAI
 
-# ── Chaves lidas SOMENTE das variaveis de ambiente ─────────────
-# NUNCA coloque chaves direto no codigo — configure no painel do Railway
-TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-OPENAI_API_KEY   = os.environ["OPENAI_API_KEY"]
-API_FOOTBALL_KEY = os.environ["API_FOOTBALL_KEY"]
+# Leitura segura das variaveis — mostra erro claro se faltar alguma
+def ler_var(nome):
+    val = os.getenv(nome, "").strip()
+    if not val:
+        log.error(f"VARIAVEL AUSENTE: {nome} — adicione no painel Variables do Railway")
+    else:
+        log.info(f"OK: {nome} carregada ({val[:6]}...)")
+    return val
+
+TELEGRAM_TOKEN   = ler_var("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = ler_var("TELEGRAM_CHAT_ID")
+OPENAI_API_KEY   = ler_var("OPENAI_API_KEY")
+API_FOOTBALL_KEY = ler_var("API_FOOTBALL_KEY")
+
+if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, OPENAI_API_KEY, API_FOOTBALL_KEY]):
+    log.error("Uma ou mais variaveis estao faltando. Bot encerrado.")
+    sys.exit(1)
 
 HORA_DISPARO = dtime(14, 30)
 MIN_ODD   = 1.5
@@ -126,38 +132,25 @@ def gerar_apostas_ia(jogos, noticias):
     agora=datetime.now().strftime("%d/%m/%Y %H:%M")
     prompt=f"""Voce e um analista conservador de apostas esportivas especialista em valor real.
 Hoje e {agora} (Brasilia UTC-3). Gere EXATAMENTE {N_APOSTAS} sugestoes para a Superbet.
-
 REGRAS ESTRITAS:
-- Apenas jogos AINDA NAO INICIADOS (horario posterior a {agora} BRT).
-- Odd minima: {MIN_ODD}. Confianca minima: {MIN_CONF}%.
+- Apenas jogos AINDA NAO INICIADOS. Odd minima: {MIN_ODD}. Confianca minima: {MIN_CONF}%.
 - Priorize: BTTS, Mais de 1.5 gols, Dupla Chance, Handicap asiatico.
-- Evite resultado 1x2 puro (exceto favoritismo extremo).
-- REJEITE times com 3+ derrotas seguidas (D D D na forma).
-- REJEITE jogos muito equilibrados (odds dos dois lados entre 1.7-2.2).
+- REJEITE times com 3+ derrotas seguidas. REJEITE odds dos dois lados entre 1.7-2.2.
 - Para BTTS: ambos times devem ter marcado em 3+ dos ultimos 5 jogos.
-- Foque em VALOR real. NAO force apostas sem {MIN_CONF}% de certeza.
 - Retorne UM JSON por linha, sem markdown, sem ```.
-
 Formato:
-{{"jogo":"A x B","liga":"Premier League","horario":"21:00","mercado":"Mais de 1.5 gols","sugestao":"Mais de 1.5 gols","odd":1.65,"confianca":78,"razao":"Motivo objetivo.","superbet_url":"https://superbet.bet.br/..."}}
-
-JOGOS:
-{json.dumps(jogos,ensure_ascii=False)}
-NOTICIAS:
-{json.dumps(noticias,ensure_ascii=False)}
-"""
+{{"jogo":"A x B","liga":"Premier League","horario":"21:00","mercado":"Mais de 1.5 gols","sugestao":"Mais de 1.5 gols","odd":1.65,"confianca":78,"razao":"Motivo.","superbet_url":"https://superbet.bet.br/..."}}
+JOGOS: {json.dumps(jogos,ensure_ascii=False)}
+NOTICIAS: {json.dumps(noticias,ensure_ascii=False)}"""
     try:
-        client=OpenAI(api_key=OPENAI_API_KEY)
-        resp=client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"user","content":prompt}],
+        resp=OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
+            model="gpt-4o-mini", messages=[{"role":"user","content":prompt}],
             temperature=0.35, max_tokens=2400)
         apostas=[]
         for linha in resp.choices[0].message.content.strip().splitlines():
-            linha=linha.strip()
-            if linha.startswith("{"):
-                try: apostas.append(json.loads(linha))
-                except Exception: pass
+            if linha.strip().startswith("{"):
+                try: apostas.append(json.loads(linha.strip()))
+                except: pass
         log.info(f"IA gerou {len(apostas)} apostas")
         return apostas
     except Exception as ex:
@@ -196,20 +189,18 @@ def formatar_mensagem(apostas, acum):
 async def enviar_telegram(msg):
     url=f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     async with httpx.AsyncClient(timeout=15) as c:
-        r=await c.post(url, json={"chat_id":TELEGRAM_CHAT_ID,"text":msg,"parse_mode":"Markdown"})
+        r=await c.post(url,json={"chat_id":TELEGRAM_CHAT_ID,"text":msg,"parse_mode":"Markdown"})
         if r.status_code==200: log.info("Telegram: enviado!")
-        else: log.error(f"Telegram erro {r.status_code}")
+        else: log.error(f"Telegram erro {r.status_code}: {r.text[:100]}")
 
 async def pipeline():
     log.info("=== Iniciando pipeline ===")
-    jogos, noticias = await asyncio.gather(buscar_jogos(), buscar_noticias())
+    jogos,noticias=await asyncio.gather(buscar_jogos(),buscar_noticias())
     if not jogos:
         await enviar_telegram("⚽ Bot: nenhum jogo futuro encontrado hoje."); return
-    apostas=gerar_apostas_ia(jogos, noticias)
-    apostas=[a for a in apostas if a.get("odd",0)>=MIN_ODD and a.get("confianca",0)>=MIN_CONF]
-    apostas=apostas[:N_APOSTAS]
-    acum=montar_acumulador(apostas)
-    await enviar_telegram(formatar_mensagem(apostas, acum))
+    apostas=gerar_apostas_ia(jogos,noticias)
+    apostas=[a for a in apostas if a.get("odd",0)>=MIN_ODD and a.get("confianca",0)>=MIN_CONF][:N_APOSTAS]
+    await enviar_telegram(formatar_mensagem(apostas,montar_acumulador(apostas)))
     log.info(f"=== {len(apostas)} apostas enviadas ===")
 
 async def main():
@@ -219,13 +210,11 @@ async def main():
         agora=datetime.now()
         if agora.time()>=HORA_DISPARO and agora.date()!=ultimo_dia:
             ultimo_dia=agora.date()
-            log.info(f"Disparando: {agora.strftime('%d/%m/%Y %H:%M')}")
-            try:
-                await pipeline()
+            try: await pipeline()
             except Exception as ex:
-                log.error(f"Erro: {ex}")
-                try: await enviar_telegram(f"⚠️ Erro hoje: `{ex}`")
-                except Exception: pass
+                log.error(f"Erro pipeline: {ex}")
+                try: await enviar_telegram(f"⚠️ Erro: `{ex}`")
+                except: pass
         await asyncio.sleep(60)
 
 if __name__=="__main__":
