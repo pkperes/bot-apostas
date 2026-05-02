@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import os, sys, json, asyncio, logging
 from datetime import datetime, timezone, time as dtime
-import xml.etree.ElementTree as ET
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
@@ -14,76 +13,53 @@ except ImportError:
     import httpx
     from openai import OpenAI
 
-# ── Diagnostico de ambiente ──────────────────────────────────────────────────
 log.info("=== DIAGNOSTICO DE AMBIENTE ===")
-variaveis_presentes = [k for k in os.environ if not k.startswith("_")]
-log.info(f"Total de variaveis de ambiente: {len(variaveis_presentes)}")
-for nome_esperado in ["TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "OPENAI_API_KEY", "API_FOOTBALL_KEY"]:
-    valor = os.environ.get(nome_esperado, "")
-    if valor:
-        log.info(f"  OK: {nome_esperado} = {valor[:8]}...")
-    else:
-        log.error(f"  AUSENTE: {nome_esperado}")
+for nome in ["TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "OPENAI_API_KEY", "API_FOOTBALL_KEY"]:
+    v = os.environ.get(nome, "")
+    log.info(f"  {'OK' if v else 'AUSENTE'}: {nome}{' = ' + v[:8] + '...' if v else ''}")
 log.info("=== FIM DO DIAGNOSTICO ===")
 
-# ── Leitura das variaveis ────────────────────────────────────────────────────
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
 API_FOOTBALL_KEY = os.environ.get("API_FOOTBALL_KEY", "").strip()
 
-ausentes = [n for n, v in {
-    "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
-    "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
-    "OPENAI_API_KEY": OPENAI_API_KEY,
-    "API_FOOTBALL_KEY": API_FOOTBALL_KEY,
-}.items() if not v]
-
+ausentes = [n for n, v in {"TELEGRAM_TOKEN": TELEGRAM_TOKEN, "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
+    "OPENAI_API_KEY": OPENAI_API_KEY, "API_FOOTBALL_KEY": API_FOOTBALL_KEY}.items() if not v]
 if ausentes:
-    for nome in ausentes:
-        log.error(f"VARIAVEL AUSENTE: {nome} — adicione no painel Variables do Railway")
-    log.error("Bot encerrado por falta de variaveis.")
+    for n in ausentes:
+        log.error(f"VARIAVEL AUSENTE: {n}")
     sys.exit(1)
 
 log.info("Todas as variaveis carregadas com sucesso.")
 
-# ── Configuracoes ────────────────────────────────────────────────────────────
 HORA_DISPARO = dtime(14, 30)
-MIN_ODD   = 1.5
-MIN_CONF  = 75
 N_APOSTAS = 10
 
+# Ligas ampliadas para garantir jogos todos os dias
 LIGAS_MAP = {
     39: "Premier League", 140: "La Liga", 78: "Bundesliga",
     135: "Serie A", 61: "Ligue 1", 2: "Champions League",
-    3: "Europa League", 71: "Brasileirao Serie A", 13: "Libertadores"
+    3: "Europa League", 848: "Conference League",
+    71: "Brasileirao Serie A", 72: "Brasileirao Serie B",
+    13: "Libertadores", 11: "Sul-Americana",
+    94: "Primeira Liga Portugal", 88: "Eredivisie",
+    144: "Pro League Belgica", 179: "Scottish Premiership",
+    203: "Super Lig Turquia", 307: "Saudi Pro League",
+    253: "MLS", 262: "Liga MX",
 }
-SUPERBET_URLS = {
-    "Premier League":      "https://superbet.bet.br/apostas-esportivas/futebol/inglaterra/premier-league",
-    "La Liga":             "https://superbet.bet.br/apostas-esportivas/futebol/espanha/la-liga",
-    "Bundesliga":          "https://superbet.bet.br/apostas-esportivas/futebol/alemanha/bundesliga",
-    "Serie A":             "https://superbet.bet.br/apostas-esportivas/futebol/italia/serie-a",
-    "Ligue 1":             "https://superbet.bet.br/apostas-esportivas/futebol/franca/ligue-1",
-    "Champions League":    "https://superbet.bet.br/apostas-esportivas/futebol/europa/champions-league",
-    "Europa League":       "https://superbet.bet.br/apostas-esportivas/futebol/europa/europa-league",
-    "Brasileirao Serie A": "https://superbet.bet.br/apostas-esportivas/futebol/brasil/campeonato-brasileiro-serie-a",
-    "Libertadores":        "https://superbet.bet.br/apostas-esportivas/futebol/america-do-sul/copa-libertadores",
-}
-RSS_FEEDS = [
-    "https://news.google.com/rss/search?q=futebol+hoje+jogo&hl=pt-BR&gl=BR&ceid=BR:pt-419",
-    "https://news.google.com/rss/search?q=football+match+today+premier+league&hl=pt-BR&gl=BR&ceid=BR:pt-419",
-    "https://news.google.com/rss/search?q=lesao+suspensao+futebol+hoje&hl=pt-BR&gl=BR&ceid=BR:pt-419",
-]
 
-# ── Funcoes auxiliares ───────────────────────────────────────────────────────
+SUPERBET_BASE = "https://superbet.bet.br/apostas-esportivas/futebol"
+
 async def buscar_forma(tid, headers):
     try:
-        async with httpx.AsyncClient(timeout=8) as c:
+        async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(f"https://v3.football.api-sports.io/fixtures?team={tid}&last=5", headers=headers)
             jogos = r.json().get("response", [])
         res = []
         for j in jogos:
-            gols = j.get("goals", {}); times = j.get("teams", {})
+            gols = j.get("goals", {})
+            times = j.get("teams", {})
             casa = (times.get("home", {}).get("id") == tid)
             gm = gols.get("home") if casa else gols.get("away")
             ga = gols.get("away") if casa else gols.get("home")
@@ -107,15 +83,22 @@ async def buscar_jogos():
             partidas = r.json().get("response", [])
         log.info(f"API-Football: {len(partidas)} partidas encontradas")
         for p in partidas:
-            fix = p.get("fixture", {}); liga = p.get("league", {}); times = p.get("teams", {})
+            fix = p.get("fixture", {})
+            liga = p.get("league", {})
+            times = p.get("teams", {})
             lid = liga.get("id", 0)
-            if lid not in LIGAS_MAP: continue
-            if fix.get("status", {}).get("short", "NS") not in ("NS", "TBD", "PST"): continue
+            if lid not in LIGAS_MAP:
+                continue
+            status = fix.get("status", {}).get("short", "NS")
+            if status not in ("NS", "TBD", "PST"):
+                continue
             ds = fix.get("date", "")
-            if not ds: continue
+            if not ds:
+                continue
             try:
                 dj = datetime.fromisoformat(ds.replace("Z", "+00:00"))
-                if dj <= agora_utc: continue
+                if dj <= agora_utc:
+                    continue
                 hora = dj.astimezone().strftime("%H:%M")
             except Exception:
                 hora = "?"
@@ -123,61 +106,83 @@ async def buscar_jogos():
             away = times.get("away", {}).get("name", "?")
             nome_liga = LIGAS_MAP[lid]
             validas.append({
-                "jogo": f"{home} x {away}", "liga": nome_liga, "horario": hora,
-                "hid": times.get("home", {}).get("id"), "aid": times.get("away", {}).get("id"),
-                "superbet_url": SUPERBET_URLS.get(nome_liga, "https://superbet.bet.br/apostas-esportivas/futebol")
+                "jogo": f"{home} x {away}",
+                "liga": nome_liga,
+                "horario": hora,
+                "hid": times.get("home", {}).get("id"),
+                "aid": times.get("away", {}).get("id"),
+                "superbet_url": SUPERBET_BASE,
             })
-        fh = await asyncio.gather(*[buscar_forma(v["hid"], headers) for v in validas])
-        fa = await asyncio.gather(*[buscar_forma(v["aid"], headers) for v in validas])
-        for i, v in enumerate(validas):
-            v["forma_home"] = fh[i]; v["forma_away"] = fa[i]
+        if validas:
+            fh = await asyncio.gather(*[buscar_forma(v["hid"], headers) for v in validas])
+            fa = await asyncio.gather(*[buscar_forma(v["aid"], headers) for v in validas])
+            for i, v in enumerate(validas):
+                v["forma_home"] = fh[i]
+                v["forma_away"] = fa[i]
         log.info(f"Jogos futuros validos: {len(validas)}")
     except Exception as ex:
         log.error(f"Erro API-Football: {ex}")
     return validas
 
+import xml.etree.ElementTree as ET
+
 async def buscar_noticias():
+    feeds = [
+        "https://news.google.com/rss/search?q=futebol+hoje+jogo&hl=pt-BR&gl=BR&ceid=BR:pt-419",
+        "https://news.google.com/rss/search?q=football+match+today&hl=pt-BR&gl=BR&ceid=BR:pt-419",
+    ]
     noticias = []
     async with httpx.AsyncClient(timeout=12, headers={"User-Agent": "Mozilla/5.0"}) as c:
-        for url in RSS_FEEDS:
+        for url in feeds:
             try:
-                r = await c.get(url); r.raise_for_status()
+                r = await c.get(url)
                 root = ET.fromstring(r.text)
-                for item in root.findall(".//item")[:4]:
+                for item in root.findall(".//item")[:5]:
                     t = item.findtext("title", "").strip()
-                    d = item.findtext("description", "").strip()[:120]
-                    if t: noticias.append(f"{t}. {d}")
+                    if t:
+                        noticias.append(t)
             except Exception:
                 pass
     log.info(f"Noticias coletadas: {len(noticias)}")
-    return noticias[:12]
+    return noticias[:10]
 
 def gerar_apostas_ia(jogos, noticias):
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-    prompt = f"""Voce e um analista conservador de apostas esportivas especialista em valor real.
-Hoje e {agora} (Brasilia UTC-3). Gere EXATAMENTE {N_APOSTAS} sugestoes para a Superbet.
-REGRAS ESTRITAS:
-- Apenas jogos AINDA NAO INICIADOS. Odd minima: {MIN_ODD}. Confianca minima: {MIN_CONF}%.
-- Priorize: BTTS, Mais de 1.5 gols, Dupla Chance, Handicap asiatico.
-- REJEITE times com 3+ derrotas seguidas. REJEITE odds dos dois lados entre 1.7-2.2.
-- Para BTTS: ambos times devem ter marcado em 3+ dos ultimos 5 jogos.
-- Retorne UM JSON por linha, sem markdown, sem ```.
-Formato:
-{{"jogo":"A x B","liga":"Premier League","horario":"21:00","mercado":"Mais de 1.5 gols","sugestao":"Mais de 1.5 gols","odd":1.65,"confianca":78,"razao":"Motivo.","superbet_url":"https://superbet.bet.br/..."}}
-JOGOS: {json.dumps(jogos, ensure_ascii=False)}
-NOTICIAS: {json.dumps(noticias, ensure_ascii=False)}"""
+
+    # Se poucos jogos, pedir menos apostas (minimo 5)
+    n_pedir = min(N_APOSTAS, max(5, len(jogos)))
+
+    prompt = (
+        f"Voce e um especialista em apostas esportivas. Hoje e {agora} (Brasilia UTC-3).\n"
+        f"Gere EXATAMENTE {n_pedir} sugestoes de apostas para os jogos abaixo.\n\n"
+        f"CRITERIOS (flexiveis para garantir sugestoes):\n"
+        f"- Odd minima: 1.30 (pode ser baixa se for muito segura)\n"
+        f"- Confianca minima: 60%\n"
+        f"- Mercados preferidos: Resultado (1X2), Dupla Chance, Mais/Menos gols, BTTS, Handicap\n"
+        f"- OBRIGATORIO: gere {n_pedir} apostas mesmo que as odds sejam conservadoras\n"
+        f"- Analise forma recente: V=vitoria, D=derrota, E=empate (mais recente por ultimo)\n\n"
+        f"Retorne UM JSON por linha, sem markdown:\n"
+        f'{{"jogo":"A x B","liga":"Liga","horario":"21:00","mercado":"Resultado",'
+        f'"sugestao":"Vitoria A","odd":1.85,"confianca":72,"razao":"Motivo breve.",'
+        f'"superbet_url":"https://superbet.bet.br/apostas-esportivas/futebol"}}\n\n'
+        f"JOGOS DISPONIVEIS:\n{json.dumps(jogos, ensure_ascii=False)}\n\n"
+        f"NOTICIAS:\n{json.dumps(noticias, ensure_ascii=False)}"
+    )
     try:
         resp = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.35,
-            max_tokens=2400
+            temperature=0.4,
+            max_tokens=3000,
         )
         apostas = []
         for linha in resp.choices[0].message.content.strip().splitlines():
-            if linha.strip().startswith("{"):
-                try: apostas.append(json.loads(linha.strip()))
-                except: pass
+            linha = linha.strip()
+            if linha.startswith("{"):
+                try:
+                    apostas.append(json.loads(linha))
+                except Exception:
+                    pass
         log.info(f"IA gerou {len(apostas)} apostas")
         return apostas
     except Exception as ex:
@@ -185,55 +190,63 @@ NOTICIAS: {json.dumps(noticias, ensure_ascii=False)}"""
         return []
 
 def montar_acumulador(apostas):
-    vistos = set(); cands = []
+    vistos, cands = set(), []
     for a in sorted(apostas, key=lambda x: x.get("confianca", 0), reverse=True):
         j = a.get("jogo", "")
         if j in vistos: continue
-        vistos.add(j); cands.append(a)
+        vistos.add(j)
+        cands.append(a)
         if len(cands) == 3: break
     if len(cands) < 3: return None
     odd = round(cands[0]["odd"] * cands[1]["odd"] * cands[2]["odd"], 2)
-    return {"apostas": cands, "odd": odd} if odd >= 4.0 else None
+    return {"apostas": cands, "odd": odd} if odd >= 3.0 else None
 
 def formatar_mensagem(apostas, acum):
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-    linhas = [f"\u26bd *APOSTAS DO DIA \u2014 SUPERBET*\n\ud83d\udcc5 {agora}\n{'─'*28}\n\n"]
+    sep = "─" * 30
+    linhas = [f"⚽ APOSTAS DO DIA — SUPERBET\n📅 {agora}\n{sep}\n\n"]
     for i, a in enumerate(apostas, 1):
-        c = a.get("confianca", "?")
-        e = "\ud83d\udd25" if c >= 85 else "\u2705"
-        linhas.append(f"{e} *{i}. {a.get('jogo', '')}* _{a.get('liga', '')}_\n")
-        linhas.append(f"   {a.get('mercado', '')} \u2192 *{a.get('sugestao', '')}*\n")
-        linhas.append(f"   \ud83d\udcb0 Odd: *{a.get('odd', '')}x* | \ud83c\udfaf {c}%\n")
-        linhas.append(f"   \ud83d\udcdd _{str(a.get('razao', ''))[:200]}_\n")
-        url = a.get("superbet_url", "")
-        if url: linhas.append(f"   \ud83d\udd17 {url}\n\n")
+        c = a.get("confianca", 0)
+        emoji = "🔥" if c >= 80 else "✅" if c >= 70 else "📌"
+        linhas.append(f"{emoji} {i}. {a.get('jogo','')}\n")
+        linhas.append(f"   🏆 {a.get('liga','')} | ⏰ {a.get('horario','')}\n")
+        linhas.append(f"   📊 {a.get('mercado','')} → {a.get('sugestao','')}\n")
+        linhas.append(f"   💰 Odd: {a.get('odd','')}x | Confiança: {c}%\n")
+        linhas.append(f"   💡 {str(a.get('razao',''))[:180]}\n")
+        url = a.get("superbet_url","")
+        if url: linhas.append(f"   🔗 {url}\n\n")
     if acum:
-        linhas.append(f"\n{'─'*28}\n\ud83c\udfb0 *MINI ACUMULADOR* \u2014 Odd: *{acum['odd']}x*\n")
+        linhas.append(f"{sep}\n🎯 MINI ACUMULADOR — Odd total: {acum['odd']}x\n")
         for i, a in enumerate(acum["apostas"], 1):
             linhas.append(f"  {i}. {a['jogo']} | {a['mercado']} ({a['odd']}x)\n")
-            linhas.append(f"     \ud83d\udd17 {a.get('superbet_url', '')}\n")
-    linhas.append("\n\u26a0\ufe0f _Aposte com responsabilidade. 18+._")
+        linhas.append(f"  🔗 {SUPERBET_BASE}\n")
+    linhas.append("\n⚠️ Aposte com responsabilidade. Apenas maiores de 18 anos.")
     return "".join(linhas)
 
 async def enviar_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    async with httpx.AsyncClient(timeout=15) as c:
-        r = await c.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
-        if r.status_code == 200:
-            log.info("Telegram: mensagem enviada com sucesso!")
-        else:
-            log.error(f"Telegram erro {r.status_code}: {r.text[:200]}")
+    # Telegram tem limite de 4096 chars por mensagem
+    for i in range(0, len(msg), 4000):
+        chunk = msg[i:i+4000]
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": chunk})
+            if r.status_code == 200:
+                log.info("Telegram: mensagem enviada com sucesso!")
+            else:
+                log.error(f"Telegram erro {r.status_code}: {r.text[:200]}")
+        await asyncio.sleep(0.5)
 
 async def pipeline():
     log.info("=== Iniciando pipeline de apostas ===")
     jogos, noticias = await asyncio.gather(buscar_jogos(), buscar_noticias())
     if not jogos:
-        await enviar_telegram("\u26bd Bot: nenhum jogo futuro encontrado hoje nas ligas monitoradas.")
+        await enviar_telegram("⚽ Bot: nenhum jogo futuro encontrado hoje nas ligas monitoradas.")
         return
     apostas = gerar_apostas_ia(jogos, noticias)
-    apostas = [a for a in apostas if a.get("odd", 0) >= MIN_ODD and a.get("confianca", 0) >= MIN_CONF][:N_APOSTAS]
+    # Sem filtro rigido — aceita tudo que a IA retornar com odd >= 1.30
+    apostas = [a for a in apostas if a.get("odd", 0) >= 1.30][:N_APOSTAS]
     if not apostas:
-        await enviar_telegram("\u26bd Bot: IA nao encontrou apostas validas hoje.")
+        await enviar_telegram("⚽ Bot: IA não gerou apostas válidas hoje.")
         return
     await enviar_telegram(formatar_mensagem(apostas, montar_acumulador(apostas)))
     log.info(f"=== Pipeline concluido: {len(apostas)} apostas enviadas ===")
@@ -250,7 +263,7 @@ async def main():
             except Exception as ex:
                 log.error(f"Erro no pipeline: {ex}")
                 try:
-                    await enviar_telegram(f"\u26a0\ufe0f Erro no bot: `{ex}`")
+                    await enviar_telegram(f"❌ Erro no bot: {ex}")
                 except Exception:
                     pass
         await asyncio.sleep(60)
