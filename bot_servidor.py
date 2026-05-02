@@ -33,7 +33,7 @@ if ausentes:
 
 log.info("Todas as variaveis carregadas com sucesso.")
 
-HORA_DISPARO = dtime(14, 30)
+HORA_DISPARO = dtime(19, 13)
 N_APOSTAS = 10
 
 # Ligas ampliadas para garantir jogos todos os dias
