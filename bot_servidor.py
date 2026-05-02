@@ -33,7 +33,8 @@ if ausentes:
 
 log.info("Todas as variaveis carregadas com sucesso.")
 
-# Disparo as 11:00 BRT — antes dos jogos europeus e brasileiros comecar
+# MODO TESTE: roda imediatamente ao iniciar e busca jogos de hoje E amanha
+MODO_TESTE = True
 HORA_DISPARO = dtime(11, 0)
 N_APOSTAS = 10
 
@@ -71,17 +72,15 @@ async def buscar_forma(tid, headers):
     except Exception:
         return "N/D"
 
-async def buscar_jogos():
-    hoje = datetime.now().strftime("%Y-%m-%d")
-    agora_utc = datetime.now(timezone.utc)
-    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+async def buscar_jogos_data(data_str, headers):
+    """Busca jogos de uma data especifica."""
     validas = []
     try:
         async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(f"https://v3.football.api-sports.io/fixtures?date={hoje}", headers=headers)
+            r = await c.get(f"https://v3.football.api-sports.io/fixtures?date={data_str}", headers=headers)
             r.raise_for_status()
             partidas = r.json().get("response", [])
-        log.info(f"API-Football: {len(partidas)} partidas encontradas")
+        log.info(f"API-Football [{data_str}]: {len(partidas)} partidas encontradas")
         for p in partidas:
             fix = p.get("fixture", {})
             liga = p.get("league", {})
@@ -97,9 +96,6 @@ async def buscar_jogos():
                 continue
             try:
                 dj = datetime.fromisoformat(ds.replace("Z", "+00:00"))
-                # Aceita jogos que ainda nao comecaram (com tolerancia de 30 min)
-                if dj <= agora_utc - timedelta(minutes=30):
-                    continue
                 hora = dj.astimezone().strftime("%H:%M")
             except Exception:
                 hora = "?"
@@ -110,19 +106,35 @@ async def buscar_jogos():
                 "jogo": f"{home} x {away}",
                 "liga": nome_liga,
                 "horario": hora,
+                "data": data_str,
                 "hid": times.get("home", {}).get("id"),
                 "aid": times.get("away", {}).get("id"),
                 "superbet_url": SUPERBET_BASE,
             })
-        if validas:
-            fh = await asyncio.gather(*[buscar_forma(v["hid"], headers) for v in validas])
-            fa = await asyncio.gather(*[buscar_forma(v["aid"], headers) for v in validas])
-            for i, v in enumerate(validas):
-                v["forma_home"] = fh[i]
-                v["forma_away"] = fa[i]
-        log.info(f"Jogos futuros validos: {len(validas)}")
     except Exception as ex:
-        log.error(f"Erro API-Football: {ex}")
+        log.error(f"Erro API-Football [{data_str}]: {ex}")
+    return validas
+
+async def buscar_jogos():
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    amanha = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Busca hoje e amanha em paralelo
+    resultados = await asyncio.gather(
+        buscar_jogos_data(hoje, headers),
+        buscar_jogos_data(amanha, headers)
+    )
+    validas = resultados[0] + resultados[1]
+
+    if validas:
+        fh = await asyncio.gather(*[buscar_forma(v["hid"], headers) for v in validas])
+        fa = await asyncio.gather(*[buscar_forma(v["aid"], headers) for v in validas])
+        for i, v in enumerate(validas):
+            v["forma_home"] = fh[i]
+            v["forma_away"] = fa[i]
+
+    log.info(f"Total jogos (hoje+amanha): {len(validas)}")
     return validas
 
 async def buscar_noticias():
@@ -150,7 +162,7 @@ def gerar_apostas_ia(jogos, noticias):
     n_pedir = min(N_APOSTAS, max(5, len(jogos)))
     prompt = (
         f"Voce e um especialista em apostas esportivas. Hoje e {agora} (Brasilia UTC-3).\n"
-        f"Gere EXATAMENTE {n_pedir} sugestoes de apostas para os jogos abaixo.\n\n"
+        f"Gere EXATAMENTE {n_pedir} sugestoes de apostas para os jogos abaixo (hoje e amanha).\n\n"
         f"CRITERIOS:\n"
         f"- Odd minima: 1.30\n"
         f"- Confianca minima: 60%\n"
@@ -158,7 +170,7 @@ def gerar_apostas_ia(jogos, noticias):
         f"- OBRIGATORIO: gere {n_pedir} apostas mesmo que as odds sejam conservadoras\n"
         f"- Analise forma recente: V=vitoria D=derrota E=empate\n\n"
         f"Retorne UM JSON por linha, sem markdown:\n"
-        f'{{"jogo":"A x B","liga":"Liga","horario":"21:00","mercado":"Resultado",'
+        f'{{"jogo":"A x B","liga":"Liga","horario":"21:00","data":"2026-05-03","mercado":"Resultado",'
         f'"sugestao":"Vitoria A","odd":1.85,"confianca":72,"razao":"Motivo breve.",'
         f'"superbet_url":"https://superbet.bet.br/apostas-esportivas/futebol"}}\n\n'
         f"JOGOS:\n{json.dumps(jogos, ensure_ascii=False)}\n\n"
@@ -204,8 +216,10 @@ def formatar_mensagem(apostas, acum):
     for i, a in enumerate(apostas, 1):
         c = a.get("confianca", 0)
         emoji = "🔥" if c >= 80 else "✅" if c >= 70 else "📌"
+        data_jogo = a.get("data", "")
+        data_label = " (amanhã)" if data_jogo and data_jogo != datetime.now().strftime("%Y-%m-%d") else ""
         linhas.append(f"{emoji} {i}. {a.get('jogo','')}\n")
-        linhas.append(f"   🏆 {a.get('liga','')} | ⏰ {a.get('horario','')}\n")
+        linhas.append(f"   🏆 {a.get('liga','')} | ⏰ {a.get('horario','')}{data_label}\n")
         linhas.append(f"   📊 {a.get('mercado','')} → {a.get('sugestao','')}\n")
         linhas.append(f"   💰 Odd: {a.get('odd','')}x | Confiança: {c}%\n")
         linhas.append(f"   💡 {str(a.get('razao',''))[:180]}\n")
@@ -235,19 +249,32 @@ async def pipeline():
     log.info("=== Iniciando pipeline de apostas ===")
     jogos, noticias = await asyncio.gather(buscar_jogos(), buscar_noticias())
     if not jogos:
-        await enviar_telegram("⚽ Bot: nenhum jogo futuro encontrado hoje nas ligas monitoradas.")
+        await enviar_telegram("⚽ Bot: nenhum jogo encontrado hoje nem amanha nas ligas monitoradas.")
         return
     apostas = gerar_apostas_ia(jogos, noticias)
     apostas = [a for a in apostas if a.get("odd", 0) >= 1.30][:N_APOSTAS]
     if not apostas:
-        await enviar_telegram("⚽ Bot: IA nao gerou apostas validas hoje.")
+        await enviar_telegram("⚽ Bot: IA nao gerou apostas validas.")
         return
     await enviar_telegram(formatar_mensagem(apostas, montar_acumulador(apostas)))
     log.info(f"=== Pipeline concluido: {len(apostas)} apostas enviadas ===")
 
 async def main():
     log.info(f"Bot iniciado. Disparo diario as {HORA_DISPARO.strftime('%H:%M')} BRT.")
-    ultimo_dia = None
+
+    # MODO TESTE: roda imediatamente ao iniciar
+    if MODO_TESTE:
+        log.info("MODO TESTE ATIVO — rodando pipeline agora!")
+        try:
+            await pipeline()
+        except Exception as ex:
+            log.error(f"Erro no pipeline: {ex}")
+            try:
+                await enviar_telegram(f"Erro no bot: {ex}")
+            except Exception:
+                pass
+
+    ultimo_dia = datetime.now().date() if MODO_TESTE else None
     while True:
         agora = datetime.now()
         if agora.time() >= HORA_DISPARO and agora.date() != ultimo_dia:
