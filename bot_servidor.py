@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-import os, sys, json, asyncio, logging
-from datetime import datetime, timezone, time as dtime
+import os, sys, json, asyncio, logging, xml.etree.ElementTree as ET
+from datetime import datetime, timezone, time as dtime, timedelta
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger(__name__)
@@ -33,10 +33,10 @@ if ausentes:
 
 log.info("Todas as variaveis carregadas com sucesso.")
 
-HORA_DISPARO = dtime(19, 13)
+# Disparo as 11:00 BRT — antes dos jogos europeus e brasileiros comecar
+HORA_DISPARO = dtime(11, 0)
 N_APOSTAS = 10
 
-# Ligas ampliadas para garantir jogos todos os dias
 LIGAS_MAP = {
     39: "Premier League", 140: "La Liga", 78: "Bundesliga",
     135: "Serie A", 61: "Ligue 1", 2: "Champions League",
@@ -97,7 +97,8 @@ async def buscar_jogos():
                 continue
             try:
                 dj = datetime.fromisoformat(ds.replace("Z", "+00:00"))
-                if dj <= agora_utc:
+                # Aceita jogos que ainda nao comecaram (com tolerancia de 30 min)
+                if dj <= agora_utc - timedelta(minutes=30):
                     continue
                 hora = dj.astimezone().strftime("%H:%M")
             except Exception:
@@ -124,8 +125,6 @@ async def buscar_jogos():
         log.error(f"Erro API-Football: {ex}")
     return validas
 
-import xml.etree.ElementTree as ET
-
 async def buscar_noticias():
     feeds = [
         "https://news.google.com/rss/search?q=futebol+hoje+jogo&hl=pt-BR&gl=BR&ceid=BR:pt-419",
@@ -148,24 +147,21 @@ async def buscar_noticias():
 
 def gerar_apostas_ia(jogos, noticias):
     agora = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-    # Se poucos jogos, pedir menos apostas (minimo 5)
     n_pedir = min(N_APOSTAS, max(5, len(jogos)))
-
     prompt = (
         f"Voce e um especialista em apostas esportivas. Hoje e {agora} (Brasilia UTC-3).\n"
         f"Gere EXATAMENTE {n_pedir} sugestoes de apostas para os jogos abaixo.\n\n"
-        f"CRITERIOS (flexiveis para garantir sugestoes):\n"
-        f"- Odd minima: 1.30 (pode ser baixa se for muito segura)\n"
+        f"CRITERIOS:\n"
+        f"- Odd minima: 1.30\n"
         f"- Confianca minima: 60%\n"
-        f"- Mercados preferidos: Resultado (1X2), Dupla Chance, Mais/Menos gols, BTTS, Handicap\n"
+        f"- Mercados: Resultado (1X2), Dupla Chance, Mais/Menos gols, BTTS, Handicap\n"
         f"- OBRIGATORIO: gere {n_pedir} apostas mesmo que as odds sejam conservadoras\n"
-        f"- Analise forma recente: V=vitoria, D=derrota, E=empate (mais recente por ultimo)\n\n"
+        f"- Analise forma recente: V=vitoria D=derrota E=empate\n\n"
         f"Retorne UM JSON por linha, sem markdown:\n"
         f'{{"jogo":"A x B","liga":"Liga","horario":"21:00","mercado":"Resultado",'
         f'"sugestao":"Vitoria A","odd":1.85,"confianca":72,"razao":"Motivo breve.",'
         f'"superbet_url":"https://superbet.bet.br/apostas-esportivas/futebol"}}\n\n'
-        f"JOGOS DISPONIVEIS:\n{json.dumps(jogos, ensure_ascii=False)}\n\n"
+        f"JOGOS:\n{json.dumps(jogos, ensure_ascii=False)}\n\n"
         f"NOTICIAS:\n{json.dumps(noticias, ensure_ascii=False)}"
     )
     try:
@@ -213,7 +209,7 @@ def formatar_mensagem(apostas, acum):
         linhas.append(f"   📊 {a.get('mercado','')} → {a.get('sugestao','')}\n")
         linhas.append(f"   💰 Odd: {a.get('odd','')}x | Confiança: {c}%\n")
         linhas.append(f"   💡 {str(a.get('razao',''))[:180]}\n")
-        url = a.get("superbet_url","")
+        url = a.get("superbet_url", "")
         if url: linhas.append(f"   🔗 {url}\n\n")
     if acum:
         linhas.append(f"{sep}\n🎯 MINI ACUMULADOR — Odd total: {acum['odd']}x\n")
@@ -225,7 +221,6 @@ def formatar_mensagem(apostas, acum):
 
 async def enviar_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    # Telegram tem limite de 4096 chars por mensagem
     for i in range(0, len(msg), 4000):
         chunk = msg[i:i+4000]
         async with httpx.AsyncClient(timeout=15) as c:
@@ -243,10 +238,9 @@ async def pipeline():
         await enviar_telegram("⚽ Bot: nenhum jogo futuro encontrado hoje nas ligas monitoradas.")
         return
     apostas = gerar_apostas_ia(jogos, noticias)
-    # Sem filtro rigido — aceita tudo que a IA retornar com odd >= 1.30
     apostas = [a for a in apostas if a.get("odd", 0) >= 1.30][:N_APOSTAS]
     if not apostas:
-        await enviar_telegram("⚽ Bot: IA não gerou apostas válidas hoje.")
+        await enviar_telegram("⚽ Bot: IA nao gerou apostas validas hoje.")
         return
     await enviar_telegram(formatar_mensagem(apostas, montar_acumulador(apostas)))
     log.info(f"=== Pipeline concluido: {len(apostas)} apostas enviadas ===")
@@ -263,7 +257,7 @@ async def main():
             except Exception as ex:
                 log.error(f"Erro no pipeline: {ex}")
                 try:
-                    await enviar_telegram(f"❌ Erro no bot: {ex}")
+                    await enviar_telegram(f"Erro no bot: {ex}")
                 except Exception:
                     pass
         await asyncio.sleep(60)
