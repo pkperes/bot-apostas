@@ -13,19 +13,20 @@ except ImportError:
     import httpx
     from openai import OpenAI
 
-for nome in ["TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "OPENAI_API_KEY", "THESPORTSDB_KEY"]:
+for nome in ["TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "OPENAI_API_KEY", "FOOTBALL_DATA_KEY"]:
     v = os.environ.get(nome, "")
     log.info(f"  {'OK' if v else 'AUSENTE'}: {nome}{' = ' + v[:8] + '...' if v else ''}")
 
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
-THESPORTSDB_KEY  = os.environ.get("THESPORTSDB_KEY", "1").strip()  # "1" = chave publica gratuita
+FOOTBALL_DATA_KEY = os.environ.get("FOOTBALL_DATA_KEY", "").strip()
 
 ausentes = [n for n, v in {
     "TELEGRAM_TOKEN": TELEGRAM_TOKEN,
     "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
     "OPENAI_API_KEY": OPENAI_API_KEY,
+    "FOOTBALL_DATA_KEY": FOOTBALL_DATA_KEY,
 }.items() if not v]
 if ausentes:
     for n in ausentes:
@@ -75,72 +76,76 @@ def url_superbet(fixture_id, home, away):
 async def buscar_jogos():
     base = datetime.now()
     data_alvo = (base + timedelta(days=1)).strftime("%Y-%m-%d") if MODO_TESTE else base.strftime("%Y-%m-%d")
-    api_key = THESPORTSDB_KEY if THESPORTSDB_KEY else "1"
+    data_ate  = (datetime.strptime(data_alvo, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     validas = []
     vistos = set()
 
-    # Liga IDs TheSportsDB
-    ligas_ids = [
-        ("4328", "Premier League"),
-        ("4335", "La Liga"),
-        ("4331", "Bundesliga"),
-        ("4332", "Serie A"),
-        ("4334", "Ligue 1"),
-        ("4480", "UEFA Champions League"),
-        ("4481", "UEFA Europa League"),
-        ("4644", "UEFA Conference League"),
-        ("4351", "Brasileirao Serie A"),
-        ("4352", "Brasileirao Serie B"),
-        ("4344", "Primeira Liga"),
-        ("4337", "Eredivisie"),
-        ("4342", "Super Lig"),
-        ("4397", "Scottish Premiership"),
-        ("4346", "Pro League"),
+    headers_fd = {
+        "X-Auth-Token": FOOTBALL_DATA_KEY,
+        "User-Agent": "Mozilla/5.0",
+    }
+
+    # Competicoes disponiveis no plano gratuito (tier free cobre estas)
+    COMPETICOES_FREE = [
+        "CL",   # UEFA Champions League
+        "PL",   # Premier League
+        "BL1",  # Bundesliga
+        "SA",   # Serie A
+        "PD",   # La Liga
+        "FL1",  # Ligue 1
+        "EL",   # UEFA Europa League
+        "DED",  # Eredivisie
+        "BSA",  # Brasileirao Serie A
+        "PPL",  # Primeira Liga
+        "EC",   # European Championship
+        "WC",   # World Cup
     ]
 
-    async def get_json(url, client):
+    async def get_matches(url, client):
         try:
-            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-            log.info(f"TheSportsDB {url[:80]}... | status={r.status_code}")
-            if r.status_code != 200:
+            r = await client.get(url, headers=headers_fd)
+            log.info(f"FD {url[:90]}... | status={r.status_code}")
+            if r.status_code == 429:
+                log.warning("Rate limit atingido na football-data.org")
                 return []
-            data = r.json()
-            return data.get("events") or data.get("event") or []
+            if r.status_code != 200:
+                log.error(f"FD erro {r.status_code}: {r.text[:200]}")
+                return []
+            return r.json().get("matches", [])
         except Exception as ex:
-            log.error(f"Falha TheSportsDB: {ex}")
+            log.error(f"Falha football-data.org: {ex}")
             return []
 
-    def processar(ev, liga_override=""):
-        data_ev  = ev.get("dateEvent", "")
-        hora_ev  = ev.get("strTime") or ev.get("strTimeLocal") or "00:00:00"
-        hora_ev  = hora_ev[:8]
-        ds = f"{data_ev}T{hora_ev}"
+    def processar(m, liga_override=""):
+        ds = m.get("utcDate", "")
+        if not ds:
+            return None
         try:
-            dt_jogo = datetime.fromisoformat(ds)
-            # TheSportsDB retorna horario UTC; converte para BRT (-3)
             from datetime import timezone
-            dt_jogo = dt_jogo.replace(tzinfo=timezone.utc).astimezone()
+            dt_jogo = datetime.fromisoformat(ds.replace("Z", "+00:00")).astimezone()
         except Exception:
             return None
 
-        agora = datetime.now().astimezone()
-        status = (ev.get("strStatus") or ev.get("strProgress") or "").lower()
-        if dt_jogo < agora and status not in ("", "not started", "tbd", "postponed", "ns"):
+        status = m.get("status", "")
+        if status not in ("SCHEDULED", "TIMED", "POSTPONED"):
             return None
 
-        home = ev.get("strHomeTeam", "?")
-        away = ev.get("strAwayTeam", "?")
-        fid  = ev.get("idEvent", "0")
+        home = m.get("homeTeam", {}).get("name", "?") or m.get("homeTeam", {}).get("shortName", "?")
+        away = m.get("awayTeam", {}).get("name", "?") or m.get("awayTeam", {}).get("shortName", "?")
+        fid  = str(m.get("id", "0"))
         chave = (fid, home, away)
         if chave in vistos:
             return None
         vistos.add(chave)
 
-        liga = liga_override or ev.get("strLeague", "")
+        liga = liga_override or m.get("competition", {}).get("name", "")
         return {
-            "fixture_id": fid, "home": home, "away": away,
-            "jogo": f"{home} x {away}", "liga": liga,
-            "pais": ev.get("strCountry", ""),
+            "fixture_id": fid,
+            "home": home,
+            "away": away,
+            "jogo": f"{home} x {away}",
+            "liga": liga,
+            "pais": m.get("area", {}).get("name", ""),
             "horario": dt_jogo.strftime("%H:%M"),
             "data": dt_jogo.strftime("%Y-%m-%d"),
             "superbet_url": url_superbet(fid, home, away),
@@ -148,43 +153,31 @@ async def buscar_jogos():
 
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            # 1) busca geral por dia — filtra pelo sport Soccer
-            eventos = await get_json(
-                f"https://www.thesportsdb.com/api/v1/json/{api_key}/eventsday.php?d={data_alvo}&s=Soccer", c
+            # 1) busca geral por data — todos os jogos acessiveis da chave
+            matches = await get_matches(
+                f"https://api.football-data.org/v4/matches?dateFrom={data_alvo}&dateTo={data_ate}&status=SCHEDULED,TIMED,POSTPONED", c
             )
-            log.info(f"eventsday Soccer {data_alvo}: {len(eventos)} eventos")
-            for ev in eventos:
-                j = processar(ev)
+            log.info(f"FD matches geral {data_alvo}: {len(matches)} jogos")
+            for m in matches:
+                j = processar(m)
                 if j:
                     validas.append(j)
 
-            # 2) se vazio, tenta sem filtro de sport
+            # 2) fallback por competicao se veio vazio
             if not validas:
-                eventos = await get_json(
-                    f"https://www.thesportsdb.com/api/v1/json/{api_key}/eventsday.php?d={data_alvo}", c
-                )
-                log.info(f"eventsday sem sport {data_alvo}: {len(eventos)} eventos")
-                for ev in eventos:
-                    if "soccer" in (ev.get("strSport") or "").lower() or "football" in (ev.get("strSport") or "").lower():
-                        j = processar(ev)
-                        if j:
-                            validas.append(j)
-
-            # 3) fallback: próximos eventos por liga
-            if not validas:
-                log.info("Sem jogos gerais. Tentando próximos eventos por liga...")
-                for liga_id, liga_nome in ligas_ids:
-                    evts = await get_json(
-                        f"https://www.thesportsdb.com/api/v1/json/{api_key}/eventsnextleague.php?id={liga_id}", c
+                log.info("FD sem jogos geral. Tentando por competicao...")
+                for comp in COMPETICOES_FREE:
+                    ms = await get_matches(
+                        f"https://api.football-data.org/v4/competitions/{comp}/matches?dateFrom={data_alvo}&dateTo={data_ate}&status=SCHEDULED,TIMED,POSTPONED", c
                     )
-                    log.info(f"eventsnextleague {liga_nome}: {len(evts)} eventos")
-                    for ev in evts:
-                        j = processar(ev, liga_nome)
+                    log.info(f"FD {comp}: {len(ms)} jogos")
+                    for m in ms:
+                        j = processar(m)
                         if j:
                             validas.append(j)
 
     except Exception as ex:
-        log.error(f"Erro TheSportsDB [buscar_jogos]: {ex}")
+        log.error(f"Erro football-data.org [buscar_jogos]: {ex}")
 
     priorizados = [j for j in validas if j["liga"] in LIGAS_BOAS]
     outros      = [j for j in validas if j["liga"] not in LIGAS_BOAS]
