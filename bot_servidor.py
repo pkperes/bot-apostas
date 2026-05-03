@@ -33,7 +33,7 @@ if ausentes:
         log.error(f"VARIAVEL AUSENTE: {n}")
     sys.exit(1)
 
-MODO_TESTE     = True
+MODO_TESTE     = false
 HORA_APOSTAS   = dtime(11, 0)
 HORA_RESULTADO = dtime(23, 50)
 N_APOSTAS      = 10
