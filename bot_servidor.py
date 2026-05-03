@@ -181,10 +181,9 @@ def gerar_apostas_ia(jogos, noticias):
         f"Gere EXATAMENTE {n_pedir} sugestoes de apostas para os jogos abaixo.",
         "",
         "CRITERIOS:",
-        "- Odd estimada entre 1.30 e 2.50",
-        "- Confianca minima: 60%",
+                "- Confianca minima: 60%",
         "- Prefira ligas conhecidas: Premier League, Brasileirao, La Liga, etc.",
-        "- Mercados aceitos (priorize os mais comuns): Resultado (1X2), Dupla Chance, Mais de 1.5 gols, Mais de 2.5 gols, BTTS",
+        "- Mercados aceitos: todos os mercados disponiveis na Superbet, incluindo resultado final, dupla chance, empate anula, over/under gols, ambas marcam, handicaps, escanteios, cartoes, chutes, jogador marca, intervalos e quaisquer outros mercados listados para o jogo",
         f"- OBRIGATORIO: gere exatamente {n_pedir} apostas, jogos diferentes",
         "",
         "Retorne UM JSON por linha, sem markdown. Inclua fixture_id, home e away:",
@@ -378,9 +377,6 @@ async def pipeline_apostas():
 
     apostas = gerar_apostas_ia(jogos, noticias)
 
-    # -- ATALHO: sem verificacao de odd na Superbet (temporario) --------------
-    apostas = [a for a in apostas if 1.30 <= float(a.get("odd", 0)) <= 2.50]
-    # -------------------------------------------------------------------------
 
     if not apostas:
         await enviar_telegram("⚽ Bot: IA nao gerou apostas validas.")
@@ -407,7 +403,7 @@ async def main():
         f"Resultados: {HORA_RESULTADO.strftime('%H:%M')} BRT"
     )
     if MODO_TESTE:
-        log.info("MODO TESTE - rodando agora!")
+        log.info("MODO TESTE - rodando agora com jogos de amanha!")
         try:
             await pipeline_apostas()
         except Exception as ex:
