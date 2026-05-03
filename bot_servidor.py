@@ -1,10 +1,3 @@
-import os, ast
-
-os.makedirs("output", exist_ok=True)
-
-# Escreve diretamente no arquivo sem passar por string interpolada
-with open("output/bot_servidor.py", "w", encoding="utf-8") as f:
-    f.write("""\
 #!/usr/bin/env python3
 import os, sys, json, asyncio, logging, xml.etree.ElementTree as ET, re, unicodedata
 from datetime import datetime, time as dtime, timedelta
@@ -71,8 +64,8 @@ HEADERS_BROWSER = {
 def slugify(text):
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9\\s-]", "", text)
-    text = re.sub(r"[\\s]+", "-", text)
+    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    text = re.sub(r"[\s]+", "-", text)
     return re.sub(r"-+", "-", text).strip("-")
 
 
@@ -188,7 +181,7 @@ def gerar_apostas_ia(jogos, noticias):
         "NOTICIAS:",
         json.dumps(noticias, ensure_ascii=False),
     ]
-    prompt = "\\n".join(partes)
+    prompt = "\n".join(partes)
 
     def parse_apostas(content):
         result = []
@@ -248,24 +241,24 @@ def montar_acumulador(apostas):
 def formatar_mensagem(apostas, acum):
     agora    = datetime.now().strftime("%d/%m/%Y %H:%M")
     hoje_str = datetime.now().strftime("%Y-%m-%d")
-    sep      = "\u2500" * 30
-    linhas   = [f"\u26bd APOSTAS DO DIA \u2014 SUPERBET\\n\U0001f4c5 {agora}\\n{sep}\\n\\n"]
+    sep      = "─" * 30
+    linhas   = [f"⚽ APOSTAS DO DIA — SUPERBET\n📅 {agora}\n{sep}\n\n"]
     for i, a in enumerate(apostas, 1):
         c      = a.get("confianca", 0)
-        emoji  = "\U0001f525" if c >= 80 else "\u2705" if c >= 70 else "\U0001f4cc"
-        dlabel = " (amanh\\u00e3)" if a.get("data", "") != hoje_str else ""
-        linhas.append(f"{emoji} {i}. {a.get('jogo', '')}\\n")
-        linhas.append(f"   \U0001f3c6 {a.get('liga', '')} \u2014 {a.get('pais', '')} | \u23f0 {a.get('horario', '')}{dlabel}\\n")
-        linhas.append(f"   \U0001f4ca {a.get('mercado', '')} \u2192 {a.get('sugestao', '')}\\n")
-        linhas.append(f"   \U0001f4b0 Odd: {a.get('odd', '')}x | Confian\\u00e7a: {c}%\\n")
-        linhas.append(f"   \U0001f4a1 {str(a.get('razao', ''))[:180]}\\n")
-        linhas.append(f"   \U0001f517 {a.get('superbet_url', SUPERBET_BASE)}\\n\\n")
+        emoji  = "🔥" if c >= 80 else "✅" if c >= 70 else "📌"
+        dlabel = " (amanh\u00e3)" if a.get("data", "") != hoje_str else ""
+        linhas.append(f"{emoji} {i}. {a.get('jogo', '')}\n")
+        linhas.append(f"   🏆 {a.get('liga', '')} — {a.get('pais', '')} | ⏰ {a.get('horario', '')}{dlabel}\n")
+        linhas.append(f"   📊 {a.get('mercado', '')} → {a.get('sugestao', '')}\n")
+        linhas.append(f"   💰 Odd: {a.get('odd', '')}x | Confian\u00e7a: {c}%\n")
+        linhas.append(f"   💡 {str(a.get('razao', ''))[:180]}\n")
+        linhas.append(f"   🔗 {a.get('superbet_url', SUPERBET_BASE)}\n\n")
     if acum:
-        linhas.append(f"{sep}\\n\U0001f3af MINI ACUMULADOR \u2014 Odd total: {acum['odd']}x\\n")
+        linhas.append(f"{sep}\n🎯 MINI ACUMULADOR — Odd total: {acum['odd']}x\n")
         for i, a in enumerate(acum["apostas"], 1):
-            linhas.append(f"  {i}. {a['jogo']} | {a['mercado']} ({a['odd']}x)\\n")
-        linhas.append("\\n")
-    linhas.append("\\n\u26a0\ufe0f Aposte com responsabilidade. Apenas maiores de 18 anos.")
+            linhas.append(f"  {i}. {a['jogo']} | {a['mercado']} ({a['odd']}x)\n")
+        linhas.append("\n")
+    linhas.append("\n⚠️ Aposte com responsabilidade. Apenas maiores de 18 anos.")
     return "".join(linhas)
 
 
@@ -303,14 +296,14 @@ async def verificar_resultados(apostas_enviadas):
     if not resultados:
         return
     acertos = 0
-    linhas  = ["\U0001f4ca RESULTADO DAS APOSTAS\\n" + "\u2500" * 30 + "\\n\\n"]
+    linhas  = ["📊 RESULTADO DAS APOSTAS\n" + "─" * 30 + "\n\n"]
     for a in apostas_enviadas:
         jogo     = a.get("jogo", "")
         mercado  = a.get("mercado", "").lower()
         sugestao = a.get("sugestao", "").lower()
         res      = resultados.get(jogo)
         if not res:
-            linhas.append(f"\u23f3 {jogo} \u2014 resultado n\\u00e3o dispon\\u00edvel\\n\\n")
+            linhas.append(f"⏳ {jogo} — resultado n\u00e3o dispon\u00edvel\n\n")
             continue
         gh, ga, total = res["gh"], res["ga"], res["total"]
         venc, btts    = res["venc"], res["btts"]
@@ -335,16 +328,16 @@ async def verificar_resultados(apostas_enviadas):
                 acertou = venc in ("home", "empate") or venc in ("away", "empate")
         if acertou:
             acertos += 1
-        icone = "\u2705" if acertou else "\u274c"
+        icone = "✅" if acertou else "❌"
         linhas.append(
-            f"{icone} {jogo}\\n"
-            f"   {a.get('mercado', '')} \u2192 {a.get('sugestao', '')}\\n"
-            f"   Placar: {gh}x{ga}\\n\\n"
+            f"{icone} {jogo}\n"
+            f"   {a.get('mercado', '')} → {a.get('sugestao', '')}\n"
+            f"   Placar: {gh}x{ga}\n\n"
         )
     tot = sum(1 for a in apostas_enviadas if a.get("jogo", "") in resultados)
     if tot > 0:
         pct = round(acertos / tot * 100)
-        linhas.append("\u2500" * 30 + f"\\n\U0001f3af Acerto: {acertos}/{tot} ({pct}%)\\n")
+        linhas.append("─" * 30 + f"\n🎯 Acerto: {acertos}/{tot} ({pct}%)\n")
     await enviar_telegram("".join(linhas))
 
 
@@ -365,7 +358,7 @@ async def pipeline_apostas():
     log.info("=== Iniciando pipeline ===")
     jogos, noticias = await asyncio.gather(buscar_jogos(), buscar_noticias())
     if not jogos:
-        await enviar_telegram("\u26bd Bot: nenhum jogo encontrado.")
+        await enviar_telegram("⚽ Bot: nenhum jogo encontrado.")
         return
 
     apostas = gerar_apostas_ia(jogos, noticias)
@@ -375,7 +368,7 @@ async def pipeline_apostas():
     # -------------------------------------------------------------------------
 
     if not apostas:
-        await enviar_telegram("\u26bd Bot: IA nao gerou apostas validas.")
+        await enviar_telegram("⚽ Bot: IA nao gerou apostas validas.")
         return
 
     apostas        = apostas[:N_APOSTAS]
@@ -434,11 +427,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-""")
-
-# Valida sintaxe do arquivo gerado
-with open("output/bot_servidor.py", "r", encoding="utf-8") as f:
-    src = f.read()
-
-ast.parse(src)
-print(f"SINTAXE OK | {len(src.splitlines())} linhas")
