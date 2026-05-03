@@ -77,37 +77,51 @@ async def buscar_jogos():
     headers_api = {"x-apisports-key": API_FOOTBALL_KEY}
     hoje = datetime.now().strftime("%Y-%m-%d")
     amanha = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    timezone_api = "America/Sao_Paulo"
     validas = []
 
+    urls = [
+        f"https://v3.football.api-sports.io/fixtures?date={hoje}&timezone={timezone_api}",
+        f"https://v3.football.api-sports.io/fixtures?date={amanha}&timezone={timezone_api}",
+    ]
+
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(
-                f"https://v3.football.api-sports.io/fixtures?from={hoje}&to={amanha}",
-                headers=headers_api,
-            )
-            log.info(f"API Football [{hoje} -> {amanha}] | requests restantes: {r.headers.get('x-ratelimit-requests-remaining', '?')}")
+        async with httpx.AsyncClient(timeout=25) as c:
+            respostas = await asyncio.gather(*[c.get(url, headers=headers_api) for url in urls])
+
+        partidas = []
+        for r in respostas:
+            log.info(f"API Football | requests restantes: {r.headers.get('x-ratelimit-requests-remaining', '?')}")
             r.raise_for_status()
-            partidas = r.json().get("response", [])
+            partidas.extend(r.json().get("response", []))
 
         agora = datetime.now().astimezone()
+        vistos = set()
 
-        for p in partidas:
-            fix = p.get("fixture", {})
-            liga = p.get("league", {})
-            times = p.get("teams", {})
+        for item in partidas:
+            fix = item.get("fixture", {})
+            liga = item.get("league", {})
+            times = item.get("teams", {})
             ds = fix.get("date", "")
             if not ds:
                 continue
+
             try:
                 dt_jogo = datetime.fromisoformat(ds.replace("Z", "+00:00")).astimezone()
             except Exception:
                 continue
-            if dt_jogo < agora:
+
+            status = fix.get("status", {}).get("short", "")
+            if dt_jogo < agora and status not in ("NS", "TBD", "PST"):
                 continue
 
             home = times.get("home", {}).get("name", "?")
             away = times.get("away", {}).get("name", "?")
             fid = fix.get("id", 0)
+            chave = (fid, home, away)
+            if chave in vistos:
+                continue
+            vistos.add(chave)
 
             validas.append({
                 "fixture_id": fid,
@@ -121,12 +135,12 @@ async def buscar_jogos():
                 "superbet_url": url_superbet(fid, home, away),
             })
     except Exception as ex:
-        log.error(f"Erro API-Football [faixa]: {ex}")
+        log.error(f"Erro API-Football [timezone/date]: {ex}")
 
     priorizados = [j for j in validas if j["liga"] in LIGAS_BOAS]
     outros = [j for j in validas if j["liga"] not in LIGAS_BOAS]
     selecionados = (priorizados + outros)[:50]
-    log.info(f"Jogos selecionados: {len(selecionados)}")
+    log.info(f"Jogos encontrados: {len(validas)} | Jogos selecionados: {len(selecionados)}")
     return selecionados
 
 
