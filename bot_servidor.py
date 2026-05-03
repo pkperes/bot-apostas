@@ -32,21 +32,23 @@ if ausentes:
 
 log.info("Todas as variaveis carregadas com sucesso.")
 
-# Roda imediatamente ao iniciar (teste), depois todo dia as 11:00 BRT
-MODO_TESTE = True
-HORA_DISPARO = dtime(11, 0)
-N_APOSTAS = 10
-SUPERBET_BASE = "https://superbet.bet.br/apostas-esportivas/futebol"
+MODO_TESTE     = True        # Roda imediatamente ao iniciar
+HORA_APOSTAS   = dtime(11, 0)   # Envia apostas as 11:00 BRT
+HORA_RESULTADO = dtime(23, 50)  # Verifica resultados as 23:50 BRT
+N_APOSTAS      = 10
+SUPERBET_BASE  = "https://superbet.bet.br/apostas-esportivas/futebol"
 
-# Ligas de qualidade para filtrar os melhores jogos
+# Arquivo para guardar apostas do dia (em memoria)
+apostas_do_dia = []
+
 LIGAS_BOAS = {
     "Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1",
     "UEFA Champions League", "UEFA Europa League", "UEFA Conference League",
     "Brasileirao Serie A", "Brasileirao Serie B", "Copa Libertadores",
     "Copa Sudamericana", "Primeira Liga", "Eredivisie", "Pro League",
     "Scottish Premiership", "Super Lig", "Saudi Pro League", "MLS", "Liga MX",
-    "Championship", "League One", "League Two", "Serie B", "Serie C",
-    "2. Bundesliga", "Ligue 2", "Segunda Division", "Segunda División",
+    "Championship", "League One", "League Two", "Serie B", "2. Bundesliga",
+    "Ligue 2", "Segunda Division", "Segunda División",
 }
 
 async def buscar_jogos_data(data_str, headers):
@@ -57,64 +59,143 @@ async def buscar_jogos_data(data_str, headers):
             r.raise_for_status()
             partidas = r.json().get("response", [])
         log.info(f"API-Football [{data_str}]: {len(partidas)} partidas totais")
-
         for p in partidas:
-            fix = p.get("fixture", {})
+            fix  = p.get("fixture", {})
             liga = p.get("league", {})
-            times = p.get("teams", {})
-            nome_liga = liga.get("name", "")
-            pais = liga.get("country", "")
+            times= p.get("teams", {})
             status = fix.get("status", {}).get("short", "NS")
-
             if status not in ("NS", "TBD", "PST"):
                 continue
-
             ds = fix.get("date", "")
-            if not ds:
-                continue
+            if not ds: continue
             try:
                 dj = datetime.fromisoformat(ds.replace("Z", "+00:00"))
                 hora = dj.astimezone().strftime("%H:%M")
             except Exception:
                 hora = "?"
-
-            home = times.get("home", {}).get("name", "?")
-            away = times.get("away", {}).get("name", "?")
-
             validas.append({
-                "jogo": f"{home} x {away}",
-                "liga": nome_liga,
-                "pais": pais,
+                "fixture_id": fix.get("id"),
+                "jogo": f"{times.get('home',{}).get('name','?')} x {times.get('away',{}).get('name','?')}",
+                "liga": liga.get("name",""),
+                "pais": liga.get("country",""),
                 "horario": hora,
                 "data": data_str,
                 "superbet_url": SUPERBET_BASE,
             })
-
     except Exception as ex:
         log.error(f"Erro API-Football [{data_str}]: {ex}")
-
     log.info(f"Jogos NS em {data_str}: {len(validas)}")
     return validas
 
 async def buscar_jogos():
     headers = {"x-apisports-key": API_FOOTBALL_KEY}
-    hoje = datetime.now().strftime("%Y-%m-%d")
+    hoje  = datetime.now().strftime("%Y-%m-%d")
     amanha = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    resultados = await asyncio.gather(
-        buscar_jogos_data(hoje, headers),
-        buscar_jogos_data(amanha, headers)
-    )
-    todos = resultados[0] + resultados[1]
-
-    # Prioriza ligas conhecidas, mas inclui outras se necessario
+    res = await asyncio.gather(buscar_jogos_data(hoje, headers), buscar_jogos_data(amanha, headers))
+    todos = res[0] + res[1]
     priorizados = [j for j in todos if j["liga"] in LIGAS_BOAS]
-    outros = [j for j in todos if j["liga"] not in LIGAS_BOAS]
-
-    # Pega os 50 melhores (priorizados primeiro)
+    outros      = [j for j in todos if j["liga"] not in LIGAS_BOAS]
     selecionados = (priorizados + outros)[:50]
-    log.info(f"Jogos selecionados: {len(selecionados)} ({len(priorizados)} ligas top + {len(outros)} outros)")
+    log.info(f"Jogos selecionados: {len(selecionados)}")
     return selecionados
+
+async def verificar_resultados(apostas_enviadas):
+    """Verifica o resultado real de cada aposta enviada."""
+    if not apostas_enviadas:
+        return
+    headers = {"x-apisports-key": API_FOOTBALL_KEY}
+    hoje = datetime.now().strftime("%Y-%m-%d")
+    ontem = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # Busca resultados de hoje e ontem (1 request por data)
+    jogos_resultados = {}
+    for data in [hoje, ontem]:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(f"https://v3.football.api-sports.io/fixtures?date={data}", headers=headers)
+                partidas = r.json().get("response", [])
+            for p in partidas:
+                fix   = p.get("fixture", {})
+                times = p.get("teams", {})
+                goals = p.get("goals", {})
+                status = fix.get("status", {}).get("short", "")
+                if status not in ("FT", "AET", "PEN"):
+                    continue
+                home = times.get("home", {}).get("name", "")
+                away = times.get("away", {}).get("name", "")
+                gh = goals.get("home", 0) or 0
+                ga = goals.get("away", 0) or 0
+                jogos_resultados[f"{home} x {away}"] = {
+                    "gols_home": gh, "gols_away": ga,
+                    "total_gols": gh + ga,
+                    "vencedor": "home" if gh > ga else "away" if ga > gh else "empate",
+                    "btts": gh > 0 and ga > 0,
+                }
+        except Exception as ex:
+            log.error(f"Erro ao buscar resultados [{data}]: {ex}")
+
+    if not jogos_resultados:
+        log.info("Nenhum resultado encontrado ainda.")
+        return
+
+    # Avalia cada aposta
+    acertos = 0
+    linhas = ["📊 RESULTADO DAS APOSTAS DE HOJE\n" + "─"*30 + "\n\n"]
+
+    for a in apostas_enviadas:
+        jogo = a.get("jogo", "")
+        mercado = a.get("mercado", "").lower()
+        sugestao = a.get("sugestao", "").lower()
+        resultado = jogos_resultados.get(jogo)
+
+        if not resultado:
+            linhas.append(f"⏳ {jogo}\n   Resultado ainda não disponível\n\n")
+            continue
+
+        gh = resultado["gols_home"]
+        ga = resultado["gols_away"]
+        total = resultado["total_gols"]
+        venc  = resultado["vencedor"]
+        btts  = resultado["btts"]
+
+        acertou = False
+        if "mais de 1.5" in mercado or "over 1.5" in mercado:
+            acertou = total >= 2
+        elif "mais de 2.5" in mercado or "over 2.5" in mercado:
+            acertou = total >= 3
+        elif "menos de 2.5" in mercado or "under 2.5" in mercado:
+            acertou = total <= 2
+        elif "btts" in mercado or "ambas marcam" in mercado:
+            acertou = btts
+        elif "vitoria" in sugestao or "vence" in sugestao:
+            time_home = jogo.split(" x ")[0].lower()
+            if time_home in sugestao:
+                acertou = venc == "home"
+            else:
+                acertou = venc == "away"
+        elif "empate" in sugestao:
+            acertou = venc == "empate"
+        elif "dupla chance" in mercado:
+            if "empate" in sugestao or "x" in sugestao.lower():
+                acertou = venc in ("home", "empate") or venc in ("away", "empate")
+            else:
+                acertou = venc != "empate"
+
+        icone = "✅" if acertou else "❌"
+        if acertou: acertos += 1
+        linhas.append(f"{icone} {jogo}\n")
+        linhas.append(f"   Aposta: {a.get('mercado','')} → {a.get('sugestao','')}\n")
+        linhas.append(f"   Resultado: {gh} x {ga}\n\n")
+
+    total_avaliados = sum(1 for a in apostas_enviadas if a.get("jogo","") in jogos_resultados)
+    if total_avaliados > 0:
+        pct = round(acertos / total_avaliados * 100)
+        linhas.append(f"─"*30 + "\n")
+        linhas.append(f"🎯 Acerto do dia: {acertos}/{total_avaliados} ({pct}%)\n")
+
+    msg = "".join(linhas)
+    log.info(msg)
+    await enviar_telegram(msg)
 
 async def buscar_noticias():
     feeds = [
@@ -128,10 +209,9 @@ async def buscar_noticias():
                 r = await c.get(url)
                 root = ET.fromstring(r.text)
                 for item in root.findall(".//item")[:5]:
-                    t = item.findtext("title", "").strip()
+                    t = item.findtext("title","").strip()
                     if t: noticias.append(t)
-            except Exception:
-                pass
+            except Exception: pass
     log.info(f"Noticias coletadas: {len(noticias)}")
     return noticias[:10]
 
@@ -148,10 +228,10 @@ def gerar_apostas_ia(jogos, noticias):
         f"- OBRIGATORIO: gere exatamente {N_APOSTAS} apostas\n\n"
         f"Retorne UM JSON por linha, sem markdown:\n"
         f'{{"jogo":"A x B","liga":"Premier League","pais":"England","horario":"16:00",'
-        f'"data":"2026-05-03","mercado":"Resultado","sugestao":"Vitoria A",'
-        f'"odd":1.75,"confianca":72,"razao":"Motivo breve.",'
+        f'"data":"2026-05-03","mercado":"Mais de 1.5 gols","sugestao":"Mais de 1.5 gols",'
+        f'"odd":1.45,"confianca":75,"razao":"Motivo breve.",'
         f'"superbet_url":"https://superbet.bet.br/apostas-esportivas/futebol"}}\n\n'
-        f"JOGOS DISPONIVEIS (hoje e amanha):\n{json.dumps(jogos, ensure_ascii=False)}\n\n"
+        f"JOGOS:\n{json.dumps(jogos, ensure_ascii=False)}\n\n"
         f"NOTICIAS:\n{json.dumps(noticias, ensure_ascii=False)}"
     )
     try:
@@ -176,7 +256,7 @@ def gerar_apostas_ia(jogos, noticias):
 def montar_acumulador(apostas):
     vistos, cands = set(), []
     for a in sorted(apostas, key=lambda x: x.get("confianca", 0), reverse=True):
-        j = a.get("jogo", "")
+        j = a.get("jogo","")
         if j in vistos: continue
         vistos.add(j)
         cands.append(a)
@@ -218,41 +298,63 @@ async def enviar_telegram(msg):
             else: log.error(f"Telegram erro {r.status_code}: {r.text[:200]}")
         await asyncio.sleep(0.5)
 
-async def pipeline():
+async def pipeline_apostas():
+    global apostas_do_dia
     log.info("=== Iniciando pipeline de apostas ===")
     jogos, noticias = await asyncio.gather(buscar_jogos(), buscar_noticias())
     if not jogos:
-        await enviar_telegram("⚽ Bot: nenhum jogo encontrado.")
+        await enviar_telegram("⚽ Bot: nenhum jogo encontrado hoje nem amanha.")
         return
     apostas = gerar_apostas_ia(jogos, noticias)
     apostas = [a for a in apostas if a.get("odd", 0) >= 1.30][:N_APOSTAS]
     if not apostas:
         await enviar_telegram("⚽ Bot: IA nao gerou apostas validas.")
         return
+    apostas_do_dia = apostas  # Salva para verificacao noturna
     await enviar_telegram(formatar_mensagem(apostas, montar_acumulador(apostas)))
-    log.info(f"=== Pipeline concluido: {len(apostas)} apostas enviadas ===")
+    log.info(f"=== {len(apostas)} apostas enviadas. Verificacao as 23:50 ===")
+
+async def pipeline_resultado():
+    log.info("=== Verificando resultados ===")
+    if not apostas_do_dia:
+        log.info("Nenhuma aposta registrada hoje para verificar.")
+        return
+    await verificar_resultados(apostas_do_dia)
 
 async def main():
-    log.info(f"Bot iniciado. Disparo diario as {HORA_DISPARO.strftime('%H:%M')} BRT.")
+    global apostas_do_dia
+    log.info(f"Bot iniciado. Apostas: {HORA_APOSTAS.strftime('%H:%M')} | Resultados: {HORA_RESULTADO.strftime('%H:%M')} BRT")
+
     if MODO_TESTE:
-        log.info("MODO TESTE — rodando pipeline imediatamente!")
+        log.info("MODO TESTE — rodando pipeline de apostas imediatamente!")
         try:
-            await pipeline()
+            await pipeline_apostas()
         except Exception as ex:
             log.error(f"Erro: {ex}")
             try: await enviar_telegram(f"Erro no bot: {ex}")
             except Exception: pass
-    ultimo_dia = datetime.now().date() if MODO_TESTE else None
+
+    ultimo_apostas   = datetime.now().date() if MODO_TESTE else None
+    ultimo_resultado = None
+
     while True:
         agora = datetime.now()
-        if agora.time() >= HORA_DISPARO and agora.date() != ultimo_dia:
-            ultimo_dia = agora.date()
-            try:
-                await pipeline()
+        hoje  = agora.date()
+
+        if agora.time() >= HORA_APOSTAS and hoje != ultimo_apostas:
+            ultimo_apostas = hoje
+            try: await pipeline_apostas()
             except Exception as ex:
-                log.error(f"Erro: {ex}")
+                log.error(f"Erro apostas: {ex}")
                 try: await enviar_telegram(f"Erro no bot: {ex}")
                 except Exception: pass
+
+        if agora.time() >= HORA_RESULTADO and hoje != ultimo_resultado:
+            ultimo_resultado = hoje
+            try: await pipeline_resultado()
+            except Exception as ex:
+                log.error(f"Erro resultados: {ex}")
+
         await asyncio.sleep(60)
 
 if __name__ == "__main__":
