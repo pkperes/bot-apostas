@@ -73,44 +73,65 @@ def url_superbet(fixture_id, home, away):
     return f"https://superbet.bet.br/odds/futebol/{slugify(home)}-x-{slugify(away)}-{fixture_id}"
 
 
-async def buscar_jogos_data(data_str, headers_api):
+async def buscar_jogos():
+    headers_api = {"x-apisports-key": API_FOOTBALL_KEY}
+    hoje   = datetime.now().strftime("%Y-%m-%d")
+    amanha = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     validas = []
+
     try:
         async with httpx.AsyncClient(timeout=20) as c:
             r = await c.get(
-                f"https://v3.football.api-sports.io/fixtures?date={data_str}",
+                f"https://v3.football.api-sports.io/fixtures?from={hoje}&to={amanha}",
                 headers=headers_api,
             )
-            log.info(f"API Football [{data_str}] | requests restantes: {r.headers.get('x-ratelimit-requests-remaining', '?')}")
+            restantes = r.headers.get("x-ratelimit-requests-remaining", "?")
+            log.info(f"API Football [{hoje} -> {amanha}] | requests restantes: {restantes}")
             r.raise_for_status()
             partidas = r.json().get("response", [])
+
+        agora = datetime.now().astimezone()
+
         for p in partidas:
             fix   = p.get("fixture", {})
             liga  = p.get("league", {})
             times = p.get("teams", {})
-            if fix.get("status", {}).get("short", "NS") not in ("NS", "TBD", "PST"):
-                continue
             ds = fix.get("date", "")
             if not ds:
                 continue
+
             try:
-                hora = datetime.fromisoformat(ds.replace("Z", "+00:00")).astimezone().strftime("%H:%M")
+                dt_jogo = datetime.fromisoformat(ds.replace("Z", "+00:00")).astimezone()
             except Exception:
-                hora = "?"
+                continue
+
+            if dt_jogo < agora:
+                continue
+
             home = times.get("home", {}).get("name", "?")
             away = times.get("away", {}).get("name", "?")
             fid  = fix.get("id", 0)
+
             validas.append({
-                "fixture_id": fid, "home": home, "away": away,
+                "fixture_id": fid,
+                "home": home,
+                "away": away,
                 "jogo": f"{home} x {away}",
-                "liga": liga.get("name", ""), "pais": liga.get("country", ""),
-                "horario": hora, "data": data_str,
+                "liga": liga.get("name", ""),
+                "pais": liga.get("country", ""),
+                "horario": dt_jogo.strftime("%H:%M"),
+                "data": dt_jogo.strftime("%Y-%m-%d"),
                 "superbet_url": url_superbet(fid, home, away),
             })
+
     except Exception as ex:
-        log.error(f"Erro API-Football [{data_str}]: {ex}")
-    log.info(f"Jogos NS em {data_str}: {len(validas)}")
-    return validas
+        log.error(f"Erro API-Football [faixa]: {ex}")
+
+    priorizados = [j for j in validas if j["liga"] in LIGAS_BOAS]
+    outros      = [j for j in validas if j["liga"] not in LIGAS_BOAS]
+    selecionados = (priorizados + outros)[:50]
+    log.info(f"Jogos selecionados: {len(selecionados)}")
+    return selecionados
 
 
 async def buscar_jogos():
