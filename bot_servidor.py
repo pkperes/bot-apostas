@@ -75,7 +75,7 @@ def url_superbet(fixture_id, home, away):
 
 async def buscar_jogos():
     headers_api = {"x-apisports-key": API_FOOTBALL_KEY}
-    hoje   = datetime.now().strftime("%Y-%m-%d")
+    hoje = datetime.now().strftime("%Y-%m-%d")
     amanha = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     validas = []
 
@@ -85,32 +85,29 @@ async def buscar_jogos():
                 f"https://v3.football.api-sports.io/fixtures?from={hoje}&to={amanha}",
                 headers=headers_api,
             )
-            restantes = r.headers.get("x-ratelimit-requests-remaining", "?")
-            log.info(f"API Football [{hoje} -> {amanha}] | requests restantes: {restantes}")
+            log.info(f"API Football [{hoje} -> {amanha}] | requests restantes: {r.headers.get('x-ratelimit-requests-remaining', '?')}")
             r.raise_for_status()
             partidas = r.json().get("response", [])
 
         agora = datetime.now().astimezone()
 
         for p in partidas:
-            fix   = p.get("fixture", {})
-            liga  = p.get("league", {})
+            fix = p.get("fixture", {})
+            liga = p.get("league", {})
             times = p.get("teams", {})
             ds = fix.get("date", "")
             if not ds:
                 continue
-
             try:
                 dt_jogo = datetime.fromisoformat(ds.replace("Z", "+00:00")).astimezone()
             except Exception:
                 continue
-
             if dt_jogo < agora:
                 continue
 
             home = times.get("home", {}).get("name", "?")
             away = times.get("away", {}).get("name", "?")
-            fid  = fix.get("id", 0)
+            fid = fix.get("id", 0)
 
             validas.append({
                 "fixture_id": fid,
@@ -123,28 +120,11 @@ async def buscar_jogos():
                 "data": dt_jogo.strftime("%Y-%m-%d"),
                 "superbet_url": url_superbet(fid, home, away),
             })
-
     except Exception as ex:
         log.error(f"Erro API-Football [faixa]: {ex}")
 
     priorizados = [j for j in validas if j["liga"] in LIGAS_BOAS]
-    outros      = [j for j in validas if j["liga"] not in LIGAS_BOAS]
-    selecionados = (priorizados + outros)[:50]
-    log.info(f"Jogos selecionados: {len(selecionados)}")
-    return selecionados
-
-
-async def buscar_jogos():
-    headers_api = {"x-apisports-key": API_FOOTBALL_KEY}
-    hoje   = datetime.now().strftime("%Y-%m-%d")
-    amanha = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-    res = await asyncio.gather(
-        buscar_jogos_data(hoje, headers_api),
-        buscar_jogos_data(amanha, headers_api),
-    )
-    todos        = res[0] + res[1]
-    priorizados  = [j for j in todos if j["liga"] in LIGAS_BOAS]
-    outros       = [j for j in todos if j["liga"] not in LIGAS_BOAS]
+    outros = [j for j in validas if j["liga"] not in LIGAS_BOAS]
     selecionados = (priorizados + outros)[:50]
     log.info(f"Jogos selecionados: {len(selecionados)}")
     return selecionados
