@@ -17,9 +17,9 @@ for nome in ["TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "OPENAI_API_KEY", "FOOTBALL_D
     v = os.environ.get(nome, "")
     log.info(f"  {'OK' if v else 'AUSENTE'}: {nome}{' = ' + v[:8] + '...' if v else ''}")
 
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "").strip()
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
+TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "").strip()
 FOOTBALL_DATA_KEY = os.environ.get("FOOTBALL_DATA_KEY", "").strip()
 
 ausentes = [n for n, v in {
@@ -64,8 +64,8 @@ HEADERS_BROWSER = {
 def slugify(text):
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
-    text = re.sub(r"[\s]+", "-", text)
+    text = re.sub(r"[^a-z0-9\\s-]", "", text)
+    text = re.sub(r"[\\s]+", "-", text)
     return re.sub(r"-+", "-", text).strip("-")
 
 
@@ -207,6 +207,12 @@ async def buscar_noticias():
     return noticias[:10]
 
 
+def _usar_max_completion_tokens(model: str) -> bool:
+    """Retorna True para modelos que exigem max_completion_tokens em vez de max_tokens."""
+    prefixos_novos = ("o1", "o3", "o4", "gpt-5")
+    return any(model.startswith(p) for p in prefixos_novos)
+
+
 def gerar_apostas_ia(jogos, noticias):
     agora   = datetime.now().strftime("%d/%m/%Y %H:%M")
     n_pedir = N_APOSTAS * 2
@@ -223,7 +229,7 @@ def gerar_apostas_ia(jogos, noticias):
         f"Gere EXATAMENTE {n_pedir} sugestoes de apostas para os jogos abaixo.",
         "",
         "CRITERIOS:",
-                "- Confianca minima: 60%",
+        "- Confianca minima: 60%",
         "- Prefira ligas conhecidas: Premier League, Brasileirao, La Liga, etc.",
         "- Mercados aceitos: todos os mercados disponiveis na Superbet, incluindo resultado final, dupla chance, empate anula, over/under gols, ambas marcam, handicaps, escanteios, cartoes, chutes, jogador marca, intervalos e quaisquer outros mercados listados para o jogo",
         f"- OBRIGATORIO: gere exatamente {n_pedir} apostas, jogos diferentes",
@@ -250,13 +256,23 @@ def gerar_apostas_ia(jogos, noticias):
                     pass
         return result
 
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    def _call(model):
+        """Monta e executa a chamada à API usando o parametro correto de tokens."""
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.4,
+        }
+        if _usar_max_completion_tokens(model):
+            kwargs["max_completion_tokens"] = 4000
+        else:
+            kwargs["max_tokens"] = 4000
+        return client.chat.completions.create(**kwargs)
+
     try:
-        resp = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
-            model=MODELO_IA,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-            max_tokens=4000,
-        )
+        resp    = _call(MODELO_IA)
         apostas = parse_apostas(resp.choices[0].message.content)
         log.info(f"IA ({MODELO_IA}) gerou {len(apostas)} apostas")
         return apostas
@@ -264,12 +280,7 @@ def gerar_apostas_ia(jogos, noticias):
         log.error(f"Erro {MODELO_IA}: {ex}")
         try:
             log.info("Fallback: gpt-4o-mini...")
-            resp = OpenAI(api_key=OPENAI_API_KEY).chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.4,
-                max_tokens=4000,
-            )
+            resp    = _call("gpt-4o-mini")
             apostas = parse_apostas(resp.choices[0].message.content)
             log.info(f"Fallback gpt-4o-mini: {len(apostas)} apostas")
             return apostas
@@ -302,11 +313,11 @@ def formatar_mensagem(apostas, acum):
     for i, a in enumerate(apostas, 1):
         c      = a.get("confianca", 0)
         emoji  = "🔥" if c >= 80 else "✅" if c >= 70 else "📌"
-        dlabel = " (amanh\u00e3)" if a.get("data", "") != hoje_str else ""
+        dlabel = " (amanhã)" if a.get("data", "") != hoje_str else ""
         linhas.append(f"{emoji} {i}. {a.get('jogo', '')}\n")
         linhas.append(f"   🏆 {a.get('liga', '')} — {a.get('pais', '')} | ⏰ {a.get('horario', '')}{dlabel}\n")
         linhas.append(f"   📊 {a.get('mercado', '')} → {a.get('sugestao', '')}\n")
-        linhas.append(f"   💰 Odd: {a.get('odd', '')}x | Confian\u00e7a: {c}%\n")
+        linhas.append(f"   💰 Odd: {a.get('odd', '')}x | Confiança: {c}%\n")
         linhas.append(f"   💡 {str(a.get('razao', ''))[:180]}\n")
         linhas.append(f"   🔗 {a.get('superbet_url', SUPERBET_BASE)}\n\n")
     if acum:
@@ -321,7 +332,8 @@ def formatar_mensagem(apostas, acum):
 async def verificar_resultados(apostas_enviadas):
     if not apostas_enviadas:
         return
-    headers_api = {"x-apisports-key": API_FOOTBALL_KEY}
+    # FIX: usar FOOTBALL_DATA_KEY (mesmo nome carregado no topo do arquivo)
+    headers_api = {"x-apisports-key": FOOTBALL_DATA_KEY}
     hoje  = datetime.now().strftime("%Y-%m-%d")
     ontem = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     resultados = {}
@@ -359,7 +371,7 @@ async def verificar_resultados(apostas_enviadas):
         sugestao = a.get("sugestao", "").lower()
         res      = resultados.get(jogo)
         if not res:
-            linhas.append(f"⏳ {jogo} — resultado n\u00e3o dispon\u00edvel\n\n")
+            linhas.append(f"⏳ {jogo} — resultado não disponível\n\n")
             continue
         gh, ga, total = res["gh"], res["ga"], res["total"]
         venc, btts    = res["venc"], res["btts"]
@@ -418,7 +430,6 @@ async def pipeline_apostas():
         return
 
     apostas = gerar_apostas_ia(jogos, noticias)
-
 
     if not apostas:
         await enviar_telegram("⚽ Bot: IA nao gerou apostas validas.")
