@@ -17,9 +17,9 @@ for nome in ["TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "OPENAI_API_KEY", "FOOTBALL_D
     v = os.environ.get(nome, "")
     log.info(f"  {'OK' if v else 'AUSENTE'}: {nome}{' = ' + v[:8] + '...' if v else ''}")
 
-TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_TOKEN", "").strip()
-TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "").strip()
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
 FOOTBALL_DATA_KEY = os.environ.get("FOOTBALL_DATA_KEY", "").strip()
 
 ausentes = [n for n, v in {
@@ -35,11 +35,9 @@ if ausentes:
 
 MODO_TESTE     = False
 HORA_APOSTAS   = dtime(11, 0)
-HORA_RESULTADO = dtime(23, 50)  # TEMP: alterar de volta para dtime(23, 50) apos teste
 N_APOSTAS      = 10
 SUPERBET_BASE  = "https://superbet.bet.br/apostas-esportivas/futebol"
 MODELO_IA      = "gpt-5.4-mini"
-apostas_do_dia = []
 
 LIGAS_BOAS = {
     "Premier League", "La Liga", "Bundesliga", "Serie A", "Ligue 1",
@@ -64,8 +62,8 @@ HEADERS_BROWSER = {
 def slugify(text):
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
     text = text.lower().strip()
-    text = re.sub(r"[^a-z0-9\\s-]", "", text)
-    text = re.sub(r"[\\s]+", "-", text)
+    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    text = re.sub(r"[\s]+", "-", text)
     return re.sub(r"-+", "-", text).strip("-")
 
 
@@ -256,7 +254,7 @@ def gerar_apostas_ia(jogos, noticias):
         return client.chat.completions.create(**kwargs)
 
     try:
-        resp    = _call(MODELO_IA)
+        resp = _call(MODELO_IA)
         apostas = parse_apostas(resp.choices[0].message.content)
         log.info(f"IA ({MODELO_IA}) gerou {len(apostas)} apostas")
         return apostas
@@ -264,7 +262,7 @@ def gerar_apostas_ia(jogos, noticias):
         log.error(f"Erro {MODELO_IA}: {ex}")
         try:
             log.info("Fallback: gpt-4o-mini...")
-            resp    = _call("gpt-4o-mini")
+            resp = _call("gpt-4o-mini")
             apostas = parse_apostas(resp.choices[0].message.content)
             log.info(f"Fallback gpt-4o-mini: {len(apostas)} apostas")
             return apostas
@@ -292,104 +290,25 @@ def montar_acumulador(apostas):
 def formatar_mensagem(apostas, acum):
     agora    = datetime.now().strftime("%d/%m/%Y %H:%M")
     hoje_str = datetime.now().strftime("%Y-%m-%d")
-    sep      = "─" * 30
-    linhas   = [f"⚽ APOSTAS DO DIA — SUPERBET\n📅 {agora}\n{sep}\n\n"]
+    sep      = "\u2500" * 30
+    linhas   = [f"\u26bd APOSTAS DO DIA \u2014 SUPERBET\n\U0001f4c5 {agora}\n{sep}\n\n"]
     for i, a in enumerate(apostas, 1):
         c      = a.get("confianca", 0)
-        emoji  = "🔥" if c >= 80 else "✅" if c >= 70 else "📌"
-        dlabel = " (amanhã)" if a.get("data", "") != hoje_str else ""
+        emoji  = "\U0001f525" if c >= 80 else "\u2705" if c >= 70 else "\U0001f4cc"
+        dlabel = " (amanh\u00e3)" if a.get("data", "") != hoje_str else ""
         linhas.append(f"{emoji} {i}. {a.get('jogo', '')}\n")
-        linhas.append(f"   🏆 {a.get('liga', '')} — {a.get('pais', '')} | ⏰ {a.get('horario', '')}{dlabel}\n")
-        linhas.append(f"   📊 {a.get('mercado', '')} → {a.get('sugestao', '')}\n")
-        linhas.append(f"   💰 Odd: {a.get('odd', '')}x | Confiança: {c}%\n")
-        linhas.append(f"   💡 {str(a.get('razao', ''))[:180]}\n")
-        linhas.append(f"   🔗 {a.get('superbet_url', SUPERBET_BASE)}\n\n")
+        linhas.append(f"   \U0001f3c6 {a.get('liga', '')} \u2014 {a.get('pais', '')} | \u23f0 {a.get('horario', '')}{dlabel}\n")
+        linhas.append(f"   \U0001f4ca {a.get('mercado', '')} \u2192 {a.get('sugestao', '')}\n")
+        linhas.append(f"   \U0001f4b0 Odd: {a.get('odd', '')}x | Confian\u00e7a: {c}%\n")
+        linhas.append(f"   \U0001f4a1 {str(a.get('razao', ''))[:180]}\n")
+        linhas.append(f"   \U0001f517 {a.get('superbet_url', SUPERBET_BASE)}\n\n")
     if acum:
-        linhas.append(f"{sep}\n🎯 MINI ACUMULADOR — Odd total: {acum['odd']}x\n")
+        linhas.append(f"{sep}\n\U0001f3af MINI ACUMULADOR \u2014 Odd total: {acum['odd']}x\n")
         for i, a in enumerate(acum["apostas"], 1):
             linhas.append(f"  {i}. {a['jogo']} | {a['mercado']} ({a['odd']}x)\n")
         linhas.append("\n")
-    linhas.append("\n⚠️ Aposte com responsabilidade. Apenas maiores de 18 anos.")
+    linhas.append("\n\u26a0\ufe0f Aposte com responsabilidade. Apenas maiores de 18 anos.")
     return "".join(linhas)
-
-
-async def verificar_resultados(apostas_enviadas):
-    if not apostas_enviadas:
-        return
-    headers_api = {"x-apisports-key": FOOTBALL_DATA_KEY}
-    hoje  = datetime.now().strftime("%Y-%m-%d")
-    ontem = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    resultados = {}
-    for data in [hoje, ontem]:
-        try:
-            async with httpx.AsyncClient(timeout=20) as c:
-                r = await c.get(
-                    f"https://v3.football.api-sports.io/fixtures?date={data}",
-                    headers=headers_api,
-                )
-                for p in r.json().get("response", []):
-                    fix   = p.get("fixture", {})
-                    times = p.get("teams", {})
-                    goals = p.get("goals", {})
-                    if fix.get("status", {}).get("short", "") not in ("FT", "AET", "PEN"):
-                        continue
-                    home = times.get("home", {}).get("name", "")
-                    away = times.get("away", {}).get("name", "")
-                    gh   = goals.get("home", 0) or 0
-                    ga   = goals.get("away", 0) or 0
-                    resultados[f"{home} x {away}"] = {
-                        "gh": gh, "ga": ga, "total": gh + ga,
-                        "venc": "home" if gh > ga else "away" if ga > gh else "empate",
-                        "btts": gh > 0 and ga > 0,
-                    }
-        except Exception as ex:
-            log.error(f"Erro resultados [{data}]: {ex}")
-    if not resultados:
-        return
-    acertos = 0
-    linhas  = ["📊 RESULTADO DAS APOSTAS\n" + "─" * 30 + "\n\n"]
-    for a in apostas_enviadas:
-        jogo     = a.get("jogo", "")
-        mercado  = a.get("mercado", "").lower()
-        sugestao = a.get("sugestao", "").lower()
-        res      = resultados.get(jogo)
-        if not res:
-            linhas.append(f"⏳ {jogo} — resultado não disponível\n\n")
-            continue
-        gh, ga, total = res["gh"], res["ga"], res["total"]
-        venc, btts    = res["venc"], res["btts"]
-        acertou = False
-        if "mais de 1.5" in mercado:
-            acertou = total >= 2
-        elif "mais de 2.5" in mercado:
-            acertou = total >= 3
-        elif "menos de 2.5" in mercado:
-            acertou = total <= 2
-        elif "btts" in mercado or "ambas marcam" in mercado:
-            acertou = btts
-        elif "vitoria" in sugestao or "vence" in sugestao:
-            th = jogo.split(" x ")[0].lower()
-            acertou = venc == ("home" if th in sugestao else "away")
-        elif "empate" in sugestao:
-            acertou = venc == "empate"
-        elif "dupla chance" in mercado:
-            if "1 ou 2" in sugestao:
-                acertou = venc != "empate"
-            else:
-                acertou = venc in ("home", "empate") or venc in ("away", "empate")
-        if acertou:
-            acertos += 1
-        icone = "✅" if acertou else "❌"
-        linhas.append(
-            f"{icone} {jogo}\n"
-            f"   {a.get('mercado', '')} → {a.get('sugestao', '')}\n"
-            f"   Placar: {gh}x{ga}\n\n"
-        )
-    tot = sum(1 for a in apostas_enviadas if a.get("jogo", "") in resultados)
-    if tot > 0:
-        pct = round(acertos / tot * 100)
-        linhas.append("─" * 30 + f"\n🎯 Acerto: {acertos}/{tot} ({pct}%)\n")
-    await enviar_telegram("".join(linhas))
 
 
 async def enviar_telegram(msg):
@@ -405,38 +324,27 @@ async def enviar_telegram(msg):
 
 
 async def pipeline_apostas():
-    global apostas_do_dia
     log.info("=== Iniciando pipeline ===")
     jogos, noticias = await asyncio.gather(buscar_jogos(), buscar_noticias())
     if not jogos:
-        await enviar_telegram("⚽ Bot: nenhum jogo encontrado.")
+        await enviar_telegram("\u26bd Bot: nenhum jogo encontrado.")
         return
 
     apostas = gerar_apostas_ia(jogos, noticias)
 
     if not apostas:
-        await enviar_telegram("⚽ Bot: IA nao gerou apostas validas.")
+        await enviar_telegram("\u26bd Bot: IA nao gerou apostas validas.")
         return
 
-    apostas        = apostas[:N_APOSTAS]
-    apostas_do_dia = apostas
+    apostas = apostas[:N_APOSTAS]
     await enviar_telegram(formatar_mensagem(apostas, montar_acumulador(apostas)))
     log.info(f"=== {len(apostas)} apostas enviadas ===")
 
 
-async def pipeline_resultado():
-    log.info("=== Verificando resultados ===")
-    if not apostas_do_dia:
-        return
-    await verificar_resultados(apostas_do_dia)
-
-
 async def main():
-    global apostas_do_dia
     log.info(
-        f"Bot v7-atalho | Modelo: {MODELO_IA} | "
-        f"Apostas: {HORA_APOSTAS.strftime('%H:%M')} | "
-        f"Resultados: {HORA_RESULTADO.strftime('%H:%M')} BRT"
+        f"Bot v8 | Modelo: {MODELO_IA} | "
+        f"Apostas: {HORA_APOSTAS.strftime('%H:%M')} BRT"
     )
     if MODO_TESTE:
         log.info("MODO TESTE - rodando agora com jogos de amanha!")
@@ -448,8 +356,7 @@ async def main():
                 await enviar_telegram(f"Erro no bot: {ex}")
             except Exception:
                 pass
-    ultimo_apostas   = datetime.now().date() if MODO_TESTE else None
-    ultimo_resultado = None
+    ultimo_apostas = datetime.now().date() if MODO_TESTE else None
     while True:
         agora = datetime.now()
         hoje  = agora.date()
@@ -463,12 +370,6 @@ async def main():
                     await enviar_telegram(f"Erro: {ex}")
                 except Exception:
                     pass
-        if agora.time() >= HORA_RESULTADO and hoje != ultimo_resultado:
-            ultimo_resultado = hoje
-            try:
-                await pipeline_resultado()
-            except Exception as ex:
-                log.error(f"Erro: {ex}")
         await asyncio.sleep(60)
 
 
