@@ -35,7 +35,7 @@ if ausentes:
 
 MODO_TESTE     = False
 HORA_APOSTAS   = dtime(11, 0)
-HORA_RESULTADO = dtime(1, 37)  # TEMP: alterar de volta para dtime(23, 50) apos teste
+HORA_RESULTADO = dtime(1, 52)  # TEMP: alterar de volta para dtime(23, 50) apos teste
 N_APOSTAS      = 10
 SUPERBET_BASE  = "https://superbet.bet.br/apostas-esportivas/futebol"
 MODELO_IA      = "gpt-5.4-mini"
