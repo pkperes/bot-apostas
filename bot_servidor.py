@@ -35,7 +35,7 @@ if ausentes:
 
 MODO_TESTE     = False
 HORA_APOSTAS   = dtime(11, 0)
-HORA_RESULTADO = dtime(23, 50)
+HORA_RESULTADO = dtime(1, 37)  # TEMP: alterar de volta para dtime(23, 50) apos teste
 N_APOSTAS      = 10
 SUPERBET_BASE  = "https://superbet.bet.br/apostas-esportivas/futebol"
 MODELO_IA      = "gpt-5.4-mini"
@@ -85,20 +85,8 @@ async def buscar_jogos():
         "User-Agent": "Mozilla/5.0",
     }
 
-    # Competicoes disponiveis no plano gratuito (tier free cobre estas)
     COMPETICOES_FREE = [
-        "CL",   # UEFA Champions League
-        "PL",   # Premier League
-        "BL1",  # Bundesliga
-        "SA",   # Serie A
-        "PD",   # La Liga
-        "FL1",  # Ligue 1
-        "EL",   # UEFA Europa League
-        "DED",  # Eredivisie
-        "BSA",  # Brasileirao Serie A
-        "PPL",  # Primeira Liga
-        "EC",   # European Championship
-        "WC",   # World Cup
+        "CL", "PL", "BL1", "SA", "PD", "FL1", "EL", "DED", "BSA", "PPL", "EC", "WC",
     ]
 
     async def get_matches(url, client):
@@ -153,7 +141,6 @@ async def buscar_jogos():
 
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            # 1) busca geral por data — todos os jogos acessiveis da chave
             matches = await get_matches(
                 f"https://api.football-data.org/v4/matches?dateFrom={data_alvo}&dateTo={data_ate}&status=SCHEDULED,TIMED,POSTPONED", c
             )
@@ -163,7 +150,6 @@ async def buscar_jogos():
                 if j:
                     validas.append(j)
 
-            # 2) fallback por competicao se veio vazio
             if not validas:
                 log.info("FD sem jogos geral. Tentando por competicao...")
                 for comp in COMPETICOES_FREE:
@@ -208,7 +194,6 @@ async def buscar_noticias():
 
 
 def _usar_max_completion_tokens(model: str) -> bool:
-    """Retorna True para modelos que exigem max_completion_tokens em vez de max_tokens."""
     prefixos_novos = ("o1", "o3", "o4", "gpt-5")
     return any(model.startswith(p) for p in prefixos_novos)
 
@@ -259,7 +244,6 @@ def gerar_apostas_ia(jogos, noticias):
     client = OpenAI(api_key=OPENAI_API_KEY)
 
     def _call(model):
-        """Monta e executa a chamada à API usando o parametro correto de tokens."""
         kwargs = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
@@ -332,7 +316,6 @@ def formatar_mensagem(apostas, acum):
 async def verificar_resultados(apostas_enviadas):
     if not apostas_enviadas:
         return
-    # FIX: usar FOOTBALL_DATA_KEY (mesmo nome carregado no topo do arquivo)
     headers_api = {"x-apisports-key": FOOTBALL_DATA_KEY}
     hoje  = datetime.now().strftime("%Y-%m-%d")
     ontem = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
