@@ -33,7 +33,7 @@ if ausentes:
         log.error(f"VARIAVEL AUSENTE: {n}")
     sys.exit(1)
 
-MODO_TESTE = False
+MODO_TESTE = True  # ALTERADO PARA TRUE - Roda imediatamente ao iniciar
 HORA_APOSTAS = dtime(11, 0)
 N_APOSTAS = 10
 SUPERBET_BASE = "https://superbet.bet.br/apostas-esportivas/futebol"
@@ -479,11 +479,11 @@ async def pipeline_apostas():
 
 async def main():
     log.info(
-        f"Bot v9-priorizacao | Modelo: {MODELO_IA} | "
+        f"Bot v9-priorizacao-TESTE | Modelo: {MODELO_IA} | "
         f"Apostas: {HORA_APOSTAS.strftime('%H:%M')} BRT"
     )
     if MODO_TESTE:
-        log.info("MODO TESTE - rodando agora com jogos de amanha!")
+        log.info("MODO TESTE ATIVADO - rodando agora com jogos de amanha (09/05)!")
         try:
             await pipeline_apostas()
         except Exception as ex:
@@ -492,6 +492,7 @@ async def main():
                 await enviar_telegram(f"Erro no bot: {ex}")
             except Exception:
                 pass
+        return  # ADICIONADO - Encerra após rodar o teste
 
     ultimo_apostas = datetime.now().date() if MODO_TESTE else None
     while True:
