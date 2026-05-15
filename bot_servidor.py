@@ -41,7 +41,7 @@ if ausentes:
         log.error(f"VARIAVEL AUSENTE: {n}")
     sys.exit(1)
 
-MODO_TESTE = True
+MODO_TESTE = False
 HORA_APOSTAS = dtime(11, 0)
 N_APOSTAS = 10
 SUPERBET_BASE = "https://superbet.bet.br/apostas-esportivas/futebol"
